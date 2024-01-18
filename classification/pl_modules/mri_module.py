@@ -3,7 +3,6 @@ from argparse import ArgumentParser
 import numpy as np
 import torch
 from pytorch_lightning import LightningModule
-import torchmetrics.metric
 from torchmetrics.metric import Metric
 from torchmetrics import Accuracy, Precision, Recall, F1Score, Specificity, AUROC
 import sys

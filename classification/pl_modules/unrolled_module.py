@@ -1,7 +1,4 @@
 from argparse import ArgumentParser
-from typing import Any, Sequence, Union
-from pytorch_lightning.callbacks.callback import Callback
-from pytorch_lightning.utilities.types import STEP_OUTPUT
 
 import piqa
 import torch

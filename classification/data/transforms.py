@@ -6,7 +6,6 @@ from typing import Union, Optional, Tuple, Sequence, NamedTuple
 from .masking import MaskFunc
 
 sys.path.append('..')
-from utils.coils import rss
 from utils.complex import complex_abs
 from utils.fft import fft2c, ifft2c
 from utils.transform_utils import to_tensor, complex_center_crop, center_crop, normalize, normalize_instance

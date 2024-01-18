@@ -11,7 +11,8 @@ from warnings import warn
 from typing import NamedTuple, Dict, Any, Union, Optional, Callable, Tuple, Sequence
 import pandas as pd
 from collections import Counter
-from torch.utils.data import WeightedRandomSampler
+import random
+
 
 def et_query(
         root: etree.Element,
@@ -106,13 +107,15 @@ class SliceDataset(torch.utils.data.Dataset):
             root: Union[str, Path, os.PathLike],
             list_path: Union[str, Path, os.PathLike],
             challenge: str,
+            data_partition: str,
             transform: Optional[Callable] = None,
             use_dataset_cache: bool = False,
             sample_rate: Optional[float] = None,
             volume_sample_rate: Optional[float] = None,
             dataset_cache_file: Union[str, Path, os.PathLike] = "dataset_cache.pkl",
             num_cols: Optional[Tuple[int]] = None,
-            raw_sample_filter: Optional[Callable] = None
+            raw_sample_filter: Optional[Callable] = None,
+
     ):
         """A PyTorch Dataset for loading fastMRI data.
 
@@ -129,7 +132,7 @@ class SliceDataset(torch.utils.data.Dataset):
             dataset_cache_file (Union[str, Path, os.PathLike], optional): A file in which to cache dataset information for faster load times. Defaults to "Dataset/fastMRI/dataset_cache.pkl".
             num_cols (Optional[Tuple[int]], optional): If provided, only slices with the desired number of columns will be considered. Defaults to None.
             raw_sample_filter (Optional[Callable], optional): A callable object that takes an raw_sample metadata as input and return a boolean indicating whether the raw_sample should be included in the dataset. Defaults to None.
-
+            data_partition (str): A callable object that takes an raw_sample metadata as input and return a boolean indicating whether the raw_sample should be includ
         """
         # * Choose between singlecoil and multicoil
         if challenge not in ("singlecoil", "multicoil"):
@@ -142,7 +145,7 @@ class SliceDataset(torch.utils.data.Dataset):
         self.transform = transform
         # * set different target for singlecoil or multicoil
         self.recons_key = ("reconstruction_esc" if challenge == "singlecoil" else "reconstruction_rss")
-
+        self.data_partition = data_partition
         # * The list of files
         self.raw_samples = []
         # * if there is a filter
@@ -170,41 +173,40 @@ class SliceDataset(torch.utils.data.Dataset):
         # if yes, use the metadata from cache
         # if not, regenerate the metadata
 
-        # if dataset_cache.get(root) is None or not use_dataset_cache:
-        files = list(Path(root).iterdir())
-        for fname in sorted(files):
-            metadata, num_slices, image_size = self._retrieve_metadata(fname)
-            new_raw_samples = []
-            if (image_size[1] >= 350) & (image_size[1] <= 400):
-                if sample_rate < 1.0:
-                    half_slice = 0.5 * num_slices
-                    start = floor(half_slice - 0.5 * sample_rate * num_slices)
-                    end = floor(half_slice + 0.5 * sample_rate * num_slices)
-                    for slice_ind in range(start, end):
-                        label = self.find_label(label_list, self.remove_h5_extension(fname), slice_ind)
-                        raw_sample = FastMRIRawDataSample(fname, slice_ind, label, metadata)
-                        if self.raw_sample_filter(raw_sample):
-                            new_raw_samples.append(raw_sample)
-                else:
-                    for slice_ind in range(num_slices):
-                        label = self.find_label(label_list, self.remove_h5_extension(fname), slice_ind)
-                        raw_sample = FastMRIRawDataSample(fname, slice_ind, label, metadata)
-                        if self.raw_sample_filter(raw_sample):
-                            new_raw_samples.append(raw_sample)
+        if dataset_cache.get(root) is None or not use_dataset_cache:
+            files = list(Path(root).iterdir())
+            for fname in sorted(files):
+                metadata, num_slices, image_size = self._retrieve_metadata(fname)
+                new_raw_samples = []
+                if (image_size[1] >= 350) & (image_size[1] <= 400):
+                    if sample_rate < 1.0:
+                        half_slice = 0.5 * num_slices
+                        start = floor(half_slice - 0.5 * sample_rate * num_slices)
+                        end = floor(half_slice + 0.5 * sample_rate * num_slices)
+                        for slice_ind in range(start, end):
+                            label = self.find_label(label_list, self.remove_h5_extension(fname), slice_ind)
+                            raw_sample = FastMRIRawDataSample(fname, slice_ind, label, metadata)
+                            if self.raw_sample_filter(raw_sample):
+                                new_raw_samples.append(raw_sample)
+                    else:
+                        for slice_ind in range(num_slices):
+                            label = self.find_label(label_list, self.remove_h5_extension(fname), slice_ind)
+                            raw_sample = FastMRIRawDataSample(fname, slice_ind, label, metadata)
 
-                self.raw_samples += new_raw_samples
+                            if self.raw_sample_filter(raw_sample):
+                                new_raw_samples.append(raw_sample)
 
-        # Calculate label distribution
-        label_distribution = self.count_label_distribution()
+                    self.raw_samples += new_raw_samples
 
-        # Calculate weights for each class
-        class_weights = [1.0 / label_distribution[label] for label in range(len(label_distribution))]
+            # Calculate label distribution
+            label_distribution = self.count_label_distribution()
+            over_minor_samples = self.oversample_minority(label_distribution)   # Add oversampled samples to the dataset
+            self.raw_samples += over_minor_samples
+            random.shuffle(self.raw_samples)
 
-        # Create a list of weights corresponding to each sample
-        weights = [class_weights[sample.label] for sample in self.raw_samples]
+        print("\n")
+        print(label_distribution)
 
-        # Create a WeightedRandomSampler
-        self.sampler = WeightedRandomSampler(weights, len(weights))
 
 
 
@@ -218,6 +220,20 @@ class SliceDataset(torch.utils.data.Dataset):
         labels = [sample.label for sample in self.raw_samples]
         label_distribution = Counter(labels)
         return label_distribution
+
+    def oversample_minority(self, label_dist):
+        oversampled_raw_samples = []
+        if self.data_partition == 'train':
+            # Oversample the minority group
+            max_samples = max(label_dist.values())
+            for label, count in label_dist.items():
+                oversample_factor = max_samples // count
+                if oversample_factor > 1:
+                    # Oversample only the minority group
+                    minority_samples = [sample for sample in self.raw_samples if sample.label == label]
+                    oversampled_raw_samples.extend(minority_samples * (oversample_factor - 1))
+        return oversampled_raw_samples
+
 
     def __len__(self):
         return len(self.raw_samples)

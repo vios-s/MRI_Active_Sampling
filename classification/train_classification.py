@@ -31,10 +31,10 @@ def build_args():
     # parser.add_argument('--center_fractions', nargs='+', default=[0.1], type=float,
     #                     help='Fraction of low-frequency k-space columns to be sampled. Should '
     #                     'have the same length as accelerations')
-    parser.add_argument('--accelerations', nargs='+', default=[4, 4, 4, 6, 6, 8], type=int,
+    parser.add_argument('--accelerations', nargs='+', default=[10, 4, 4, 6, 6, 8, 20], type=int,
                         help='Ratio of k-space columns to be sampled. If multiple values are '
                         'provided, then one of those is chosen uniformly at random for each volume.')
-    parser.add_argument('--center_fractions', nargs='+', default=[0.25, 0.167, 0.125, 0.167, 0.125, 0.125], type=float,
+    parser.add_argument('--center_fractions', nargs='+', default=[0.1, 0.167, 0.125, 0.167, 0.125, 0.125, 0.1], type=float,
                         help='Fraction of low-frequency k-space columns to be sampled. Should '
                         'have the same length as accelerations')
     parser.add_argument("--ckpt_path", default=None, type=str)

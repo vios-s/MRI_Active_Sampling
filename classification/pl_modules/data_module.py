@@ -9,6 +9,7 @@ sys.path.append('..')
 from data import SliceDataset
 
 from typing import Callable, Optional
+from torch.utils.data import WeightedRandomSampler
 
 class FastMriDataModule(pl.LightningDataModule):
     
@@ -130,10 +131,11 @@ class FastMriDataModule(pl.LightningDataModule):
             volume_sample_rate=volume_sample_rate,
             challenge=self.challenge,
             use_dataset_cache=self.use_dataset_cache,
-            raw_sample_filter=raw_sample_filter
+            raw_sample_filter=raw_sample_filter,
+            data_partition=data_partition
         )
 
-        sampler = dataset.sampler
+        sampler = None
         
         dataloader = torch.utils.data.DataLoader(
             dataset=dataset,

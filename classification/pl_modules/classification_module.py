@@ -63,7 +63,7 @@ class ResNet50Module(MriModule):
         )
 
         desired_layer = getattr(self.resnet50, feature_map_layer)
-        self.gradcam = GradCAM(model=self.resnet50, target_layers=desired_layer)
+        # self.gradcam = GradCAM(model=self.resnet50, target_layers=desired_layer)
 
 
 
