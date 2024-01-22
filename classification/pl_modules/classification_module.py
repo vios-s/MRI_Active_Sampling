@@ -46,12 +46,10 @@ class ResNet50Module(MriModule):
         self.weight_decay = weight_decay
         self.loss = nn.BCELoss()
         self.feature_map = torch.zeros([2,2])
+
         # Load pre-trained ResNet50 model
         self.resnet50 = models.resnet50(weights='DEFAULT')
-
-
-        # # Modify the output layer to match the number of output channels/classes
-        # self.resnet50.fc = nn.Linear(self.resnet50.fc.in_features, self.num_classes)
+        self.append_dropout(self.resnet50, rate=dropout_prob)
 
         # Modify the output layer to match the number of output channels/classes
         in_features = self.resnet50.fc.in_features
@@ -62,10 +60,21 @@ class ResNet50Module(MriModule):
             nn.Linear(in_features // 2, num_classes)
         )
 
-        desired_layer = getattr(self.resnet50, feature_map_layer)
+        # desired_layer = getattr(self.resnet50, feature_map_layer)
+        print(self.resnet50)
         # self.gradcam = GradCAM(model=self.resnet50, target_layers=desired_layer)
 
-
+    def append_dropout(self, module, rate):
+        for name, child_module in module.named_children():
+            if len(list(child_module.children())) > 0:
+                self.append_dropout(child_module, rate)
+            if isinstance(child_module, nn.ReLU) and not isinstance(child_module, nn.Dropout2d):
+                # Create a new ReLU layer and add dropout to it
+                new_module = nn.Sequential(
+                    nn.ReLU(),
+                    nn.Dropout2d(p=rate)  # Set inplace to False
+                )
+                setattr(module, name, new_module)
 
     def forward(self, image):
         # Assuming binary classification, use sigmoid activation for probabilities
@@ -265,12 +274,12 @@ class ResNet50Module(MriModule):
         parser = MriModule.add_model_specific_args(parser)
 
         parser.add_argument("--num_classes", type=int, default=2)
-        parser.add_argument("--lr", type=float, default=1e-4)
+        parser.add_argument("--lr", type=float, default=5e-5)
         parser.add_argument("--lr_step_size", type=int, default=40)
         parser.add_argument("--lr_gamma", type=float, default=0.1)
         parser.add_argument("--weight_decay", type=float, default=0.0)
         parser.add_argument("--feature_map_layer", type=str, default='layer4')
-        parser.add_argument("--dropout_prob", type=float, default=0.5)
+        parser.add_argument("--dropout_prob", type=float, default=0.2)
         return parser
 
 

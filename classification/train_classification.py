@@ -21,14 +21,14 @@ def build_args():
     batch_size = 16
 
     data_path = fetch_dir("knee_path", path_config)
-    default_root_dir = fetch_dir("log_path", path_config) / "res50_multiacc_knee_dropout"
+    default_root_dir = fetch_dir("log_path", path_config) / "modif_res50_multi_MT_knee_dropout"
 
     parser.add_argument("--mode", default="train", type=str, choices=["train", "test"])
     parser.add_argument("--mask_type", default="random", type=str, choices=["random", "equispaced"])
-    # parser.add_argument('--accelerations', nargs='+', default=[10], type=int,
+    # parser.add_argument('--accelerations', nargs='+', default=[8], type=int,
     #                     help='Ratio of k-space columns to be sampled. If multiple values are '
     #                     'provided, then one of those is chosen uniformly at random for each volume.')
-    # parser.add_argument('--center_fractions', nargs='+', default=[0.1], type=float,
+    # parser.add_argument('--center_fractions', nargs='+', default=[0.125], type=float,
     #                     help='Fraction of low-frequency k-space columns to be sampled. Should '
     #                     'have the same length as accelerations')
     parser.add_argument('--accelerations', nargs='+', default=[10, 4, 4, 6, 6, 8, 20], type=int,
@@ -46,7 +46,7 @@ def build_args():
         seed=0,
         batch_size=batch_size,
         default_root_dir=default_root_dir,
-        max_epochs=40,
+        max_epochs=80,
         test_path=None
     )
 
@@ -111,7 +111,7 @@ def main():
         lr_gamma=args.lr_gamma,
         weight_decay=args.weight_decay,
         feature_map_layer='layer4',
-        dropout_prob=0.5
+        dropout_prob=0.2
     )
 
     # * trainer

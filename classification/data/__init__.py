@@ -1,1 +1,1 @@
-from .mri_data import SliceDataset
+from .mri_data import SliceDataset,OasisSliceDataset

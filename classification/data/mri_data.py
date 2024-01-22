@@ -314,3 +314,95 @@ class SliceDataset(torch.utils.data.Dataset):
 
     def remove_h5_extension(self, fname):
         return os.path.splitext(fname.name)[0]
+
+class OasisMRIRawDataSample(NamedTuple):
+    """Basic data type for fastMRI raw data.
+
+    Elements:
+        fname: id for each patient, Path
+        slice_ind: slice index, int
+        metadata: metadata for each volume, Dict
+    """
+    fname: Path
+    slice_ind: int
+    metadata: Dict[str, Any]
+
+
+class OasisSliceDataset(torch.utils.data.Dataset):
+    def __init__(
+            self,
+            root: list,
+            data_root: list,
+            transform: Optional[Callable] = None,
+            sample_rate: Optional[float] = None
+    ):
+        self.root = root
+        self.transform = transform
+        self.sample_rate = sample_rate
+        self.data_root = data_root
+        self.raw_samples = self.create_sample_list(self.root)
+
+    def __getitem__(self, index):
+        # * get data from raw_samples and feed into transform
+        fname, dataslice, metadata = self.raw_samples[index]
+        raw_target = self.read_raw_data(self.data_root, fname, dataslice)
+        _, raw_kspace = self.im2kp(torch.tensor(raw_target))
+        if self.transform is None:
+            sample = (raw_kspace, torch.tensor(raw_target), fname, dataslice, metadata)
+        else:
+            sample = self.OASIS_transform(raw_kspace, torch.tensor(raw_target), fname, dataslice, metadata, mask=None)
+
+        return sample
+
+    def __len__(self):
+        return len(self.raw_samples)
+
+    def create_sample_list(self, list_path):
+        raw_samples = []
+        with open(list_path) as metalist:
+            datalist = csv.reader(metalist, delimiter=',')
+            for row in datalist:
+                # if datalist.line_num == 1:
+                #     continue
+                fname = row[0]
+                metadata = {'Gender': row[1],
+                            'Age': self.age_group(row[2]),
+                            }
+                slices = int(row[6])
+                mid = round(slices/2)
+                half_sli = round(slices * self.sample_rate / 2)
+                for num in range((mid - half_sli),(mid + half_sli)):
+                    new_raw_sample = OasisMRIRawDataSample(fname, num, metadata)
+                    raw_samples.append(new_raw_sample)
+            metalist.close()
+        return raw_samples
+
+    def age_group(self, age):
+        # Group age data into three categories
+        young_age = 40
+        old_age = 65
+        if int(age) <= young_age:
+            age_group = 'Y'
+        elif int(age) > old_age:
+            age_group = 'O'
+        else:
+            age_group = 'M'
+        return age_group
+
+    def read_raw_data(self, data_path, patient_id, dataslice):
+        # read data and select slices based on patient id from data_list
+
+        image_path = glob(os.path.join(data_path, patient_id, 'PROCESSED', 'MPRAGE', 'T88_111', '*t88_gfc.img'))
+        image_data = nib.load(image_path[0]).get_fdata()
+        raw_image = np.transpose(image_data.squeeze(-1), (1, 0, 2))
+        raw_slices = raw_image[dataslice]
+
+        return raw_slices
+
+    def im2kp(self,image_data, norm_type="ortho"):
+        # perform fft in last two dimensions of input data
+        kspace_complex_data = torch.fft.fft2(image_data, dim=(-2, -1), norm=norm_type)
+        kspace_split_data = torch.view_as_real(kspace_complex_data)
+
+
+        return kspace_complex_data, kspace_split_data
