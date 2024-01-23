@@ -16,7 +16,7 @@ class ResNet50Module(MriModule):
     def __init__(
             self,
             num_classes: int = 2,  # Change to the appropriate number of classes
-            lr: float = 1e-3,
+            lr: float = 1e-4,
             lr_step_size: int = 40,
             lr_gamma: float = 0.1,
             weight_decay: float = 0.0,
@@ -77,15 +77,15 @@ class ResNet50Module(MriModule):
                 setattr(module, name, new_module)
 
     def forward(self, image):
-        # Assuming binary classification, use sigmoid activation for probabilities
-        return self.resnet50(image)
+        # Assuming binary classification, use softmax activation for probabilities
+        return F.softmax(self.resnet50(image), dim=1)
 
     def training_step(self, batch, batch_idx):
 
         output = self(batch.image)
         one_hot_label = F.one_hot(batch.label, num_classes=self.num_classes).float()
-        loss = self.loss(torch.sigmoid(output), one_hot_label)
-        acc = (torch.sigmoid(output).argmax(dim=-1) == batch.label).float().mean()
+        loss = self.loss(output, one_hot_label)
+        acc = (output.argmax(dim=-1) == batch.label).float().mean()
         # Logs the accuracy per epoch to tensorboard (weighted average over batches)
         self.log("train_acc", acc)
         self.log("train_loss", loss.detach())
@@ -113,9 +113,9 @@ class ResNet50Module(MriModule):
                 "max_value": batch.max_value,
                 "meta_data": batch.metadata,
                 "feature_map": feature_map,
-                "predictions": torch.sigmoid(output),
+                "predictions": output,
                 "labels": batch.label,
-                "loss": self.loss(torch.sigmoid(output),one_hot_label).item()
+                "loss": self.loss(output,one_hot_label).item()
             }
         else:
             mean = batch.mean.unsqueeze(1).unsqueeze(2)
@@ -130,9 +130,9 @@ class ResNet50Module(MriModule):
                 "max_value": batch.max_value,
                 "meta_data": batch.metadata,
                 "feature_map": feature_map,
-                "predictions": torch.sigmoid(output),
+                "predictions": output,
                 "labels": batch.label,
-                "loss": self.loss(torch.sigmoid(output),one_hot_label).item()
+                "loss": self.loss(output,one_hot_label).item()
             }
 
         for k in ("mask", "batch_idx", "fname", "slice_num", "max_value", "meta_data", "feature_map", "predictions", "labels", "loss"):
@@ -162,9 +162,9 @@ class ResNet50Module(MriModule):
                 # self.log_image(f"{key}/feature_map", feature_map)
 
         output_log = {
-                "predictions": torch.sigmoid(output),
+                "predictions": output,
                 "labels": batch.label,
-                "loss": self.loss(torch.sigmoid(output), one_hot_label)
+                "loss": self.loss(output, one_hot_label)
                  }
 
         self.validation_step_outputs.append(output_log)
@@ -189,9 +189,9 @@ class ResNet50Module(MriModule):
                 "max_value": batch.max_value,
                 "meta_data": batch.metadata,
                 "feature_map": feature_map,
-                "predictions": torch.sigmoid(output),
+                "predictions": output,
                 "labels": batch.label,
-                "loss": self.loss(torch.sigmoid(output),one_hot_label)
+                "loss": self.loss(output,one_hot_label)
             }
         else:
             mean = batch.mean.unsqueeze(1).unsqueeze(2)
@@ -206,9 +206,9 @@ class ResNet50Module(MriModule):
                 "max_value": batch.max_value,
                 "meta_data": batch.metadata,
                 "feature_map": feature_map,
-                "predictions": torch.sigmoid(output),
+                "predictions": output,
                 "labels": batch.label,
-                "loss": self.loss(torch.sigmoid(output),one_hot_label)
+                "loss": self.loss(output,one_hot_label)
             }
 
         for k in (
@@ -243,9 +243,9 @@ class ResNet50Module(MriModule):
                 # self.log_image(f"{key}/feature_map", feature_map)
 
         output_log = {
-                "predictions": torch.sigmoid(output),
+                "predictions": output,
                 "labels": batch.label,
-                "loss": self.loss(torch.sigmoid(output), one_hot_label)
+                "loss": self.loss(output, one_hot_label)
                  }
 
         self.test_step_outputs.append(output_log)
@@ -274,7 +274,7 @@ class ResNet50Module(MriModule):
         parser = MriModule.add_model_specific_args(parser)
 
         parser.add_argument("--num_classes", type=int, default=2)
-        parser.add_argument("--lr", type=float, default=5e-5)
+        parser.add_argument("--lr", type=float, default=1e-4)
         parser.add_argument("--lr_step_size", type=int, default=40)
         parser.add_argument("--lr_gamma", type=float, default=0.1)
         parser.add_argument("--weight_decay", type=float, default=0.0)

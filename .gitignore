@@ -1,2 +1,8 @@
 
 classification/log/
+
+active_sampler/Dataset/test_dataset/
+
+active_sampler/log/
+
+*.ipynb
