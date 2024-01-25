@@ -20,7 +20,7 @@ from utils.fft import fft2c, ifft2c
 from utils.transform_utils import to_tensor, complex_center_crop, normalize, normalize_instance
 
 # Constants
-LIST_PATH = '../Dataset/MT_label_data.csv'
+LIST_PATH = './Dataset/MT_label_data.csv'
 
 def et_query(root, qlist, namespace="http://www.ismrm.org/ISMRMRD"):
     s = "."
@@ -270,40 +270,3 @@ def create_data_loader(args, partition, shuffle=False, display=False):
     )
     return loader
 
-
-
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-
-    # Define your command-line arguments
-    parser.add_argument('--data_path', type=Path, default=Path('../Dataset/test_dataset'))
-    parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.08, 0.04])
-    parser.add_argument('--accelerations', type=int, nargs='+', default=[4, 8])
-    parser.add_argument('--resolution', type=list, default=[320,320])
-    parser.add_argument('--sample_rate', type=float, default=1.0)
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--val_batch_size', type=int, default=16)
-    parser.add_argument('--num_workers', type=int, default=0)
-
-    # Parse the command-line arguments
-    args = parser.parse_args()
-
-    # Use args to create DataLoader or any other functionality
-    train_loader = create_data_loader(args, 'train', shuffle=True, display=False)
-    val_loader = create_data_loader(args, 'val', shuffle=False, display=True)
-    test_loader = create_data_loader(args, 'test', shuffle=False, display=True)
-
-
-# Training loop
-for batch_idx, batch_data in enumerate(train_loader):
-    kspace, masked_kspace, mask, zf, target, gt_mean, gt_std, fname, slice_info = batch_data
-
-    # Your training code goes here...
-
-    # Print batch information
-    print(np.shape(kspace),np.shape(mask))
-    print(f"Batch {batch_idx + 1}/{len(train_loader)}")
-    print(f"File Name: {fname}")
-    print(f"Slice Info: {slice_info}")

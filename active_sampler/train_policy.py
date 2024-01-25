@@ -388,7 +388,7 @@ def main(args):
 def create_arg_parser():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--resolution', default=128, type=int, help='Resolution of images')
+    parser.add_argument('--resolution', default=[640, 356], type=list, help='Resolution of images')
     parser.add_argument('--dataset', default='knee', help='Dataset type to use.')
     parser.add_argument('--data_path', type=pathlib.Path, required=True,
                         help="Path to the dataset. Make sure to set this consistently with the 'dataset' "

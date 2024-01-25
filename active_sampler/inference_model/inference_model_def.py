@@ -6,15 +6,27 @@ Copyright (c) Facebook, Inc. and its affiliates.
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 """
-# from argparse import ArgumentParser
+
 import torch
-# import numpy as np
 import torch.nn as nn
-# from .mri_module import MriModule
-# import torch.nn.functional as F
-# import sys
-# from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam import GradCAM, GradCAMPlusPlus
+from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
+import torch.nn.functional as F
 from torchvision import models  # Assuming you have a ResNet50 model implementation
+
+
+class GradCAMPPModel(nn.Module):
+    def __init__(self, model, target_layers):
+        super(GradCAMPPModel, self).__init__()
+        self.model = model
+        self.target_layers = target_layers
+        self.cam = GradCAMPlusPlus(model=self.model, target_layers=self.target_layers)
+
+    def forward(self, input_tensor, targets=None):
+        input_targets = [ClassifierOutputTarget(category) for category in targets.tolist()] if targets is not None else None
+        grayscale_cam = self.cam(input_tensor=input_tensor, targets=input_targets)
+        model_outputs = self.cam.outputs
+        return grayscale_cam, F.softmax(model_outputs, dim=-1)
 
 
 
@@ -26,7 +38,6 @@ class ResNet50Module(nn.Module):
             lr_step_size: int = 40,
             lr_gamma: float = 0.1,
             weight_decay: float = 0.0,
-            feature_map_layer: str = 'layer4',
             dropout_prob: float = 0.5,
             **kwargs
     ):
@@ -50,7 +61,6 @@ class ResNet50Module(nn.Module):
         self.lr_gamma = lr_gamma
         self.weight_decay = weight_decay
         self.loss = nn.BCELoss()
-        self.feature_map = torch.zeros([2,2])
 
         # Load pre-trained ResNet50 model
         self.resnet50 = models.resnet50(weights='DEFAULT')
@@ -65,9 +75,8 @@ class ResNet50Module(nn.Module):
             nn.Linear(in_features // 2, num_classes)
         )
 
-        # desired_layer = getattr(self.resnet50, feature_map_layer)
-        print(self.resnet50)
-        # self.gradcam = GradCAM(model=self.resnet50, target_layers=desired_layer)
+        # print(self.resnet50)
+
 
     def append_dropout(self, module, rate):
         for name, child_module in module.named_children():
@@ -83,8 +92,8 @@ class ResNet50Module(nn.Module):
 
 
     def forward(self, image):
-        # Assuming binary classification, use sigmoid activation for probabilities
-        return self.resnet50(image)
+        # Assuming binary classification, use softmax activation for probabilities
+        return F.softmax(self.resnet50(image), dim=-1)
 
 
 def build_inference_optimizer(params, args):
@@ -113,7 +122,6 @@ def build_inference_model(args):
         lr_step_size=args['lr_step_size'],
         lr_gamma=args['lr_gamma'],
         weight_decay=args['weight_decay'],
-        feature_map_layer='layer4',
         dropout_prob=args['dropout_prob']
     )
 
