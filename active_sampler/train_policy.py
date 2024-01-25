@@ -13,18 +13,14 @@ import torch
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from src.helpers.torch_metrics import compute_ssim, compute_psnr
-from src.helpers.utils import (add_mask_params, save_json, build_optim, count_parameters,
+from src.helpers.torch_metrics import compute_ssim
+from utils.utils import (add_mask_params, save_json, build_optim, count_parameters,
                                count_trainable_parameters, count_untrainable_parameters, str2bool, str2none)
 from data.data_loading import create_data_loader
-# from .reconstruction_model.reconstruction_model_utils import load_recon_model
-
-
+from inference_model.inference_model_utils import load_infer_model
 from policy_model.policy_model_utils import (build_policy_model, load_policy_model, save_policy_model,
                                                  compute_scores, create_data_range_dict, compute_backprop_trajectory,
                                                  compute_next_step_reconstruction, get_policy_probs)
-from inference_model.inference_model_utils import load_infer_model
-
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -68,6 +64,7 @@ def train_epoch(args, epoch, recon_model, model, loader, optimiser, writer, data
 
         # Base reconstruction model forward pass: input to policy model
         recons = recon_model(zf)
+        print(np.shape(recons))
 
         if cbatch == 1:  # Only after backprop is performed
             optimiser.zero_grad()
@@ -153,7 +150,8 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
             init_ssim_val = compute_ssim(unnorm_recons, unnorm_gt, size_average=False,
                                          data_range=data_range).mean(dim=(-1, -2)).sum()
             # print(init_ssim_val)
-            init_psnr_val = compute_psnr(args, unnorm_recons, unnorm_gt, data_range).sum()
+            init_psnr_val = compute_ssim(unnorm_recons, unnorm_gt, size_average=False,
+                                         data_range=data_range).mean(dim=(-1, -2)).sum()
 
             batch_ssims = [init_ssim_val.item()]
             batch_psnrs = [init_psnr_val.item()]
@@ -211,12 +209,12 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
     return ssims, psnrs, time.perf_counter() - start
 
 
-def train_and_eval(args, infer_args, recon_model):
+def train_and_eval(args, infer_args, infer_model):
     """
     Wrapper for training and evaluation of policy model.
 
     :param args: Argument object, containing hyperparameters for training and evaluation.
-    :param infer_args: inference model arguments.
+    :param recon_args: reconstruction model arguments.
     :param recon_model: reconstruction model.
     """
     if args.resume:
@@ -264,7 +262,7 @@ def train_and_eval(args, infer_args, recon_model):
         wandb.watch(model, log='all')
 
     # Logging
-    logging.info(recon_model)
+    logging.info(infer_model)
     logging.info(model)
     # Save arguments for bookkeeping
     args_dict = {key: str(value) for key, value in args.__dict__.items()
@@ -275,9 +273,9 @@ def train_and_eval(args, infer_args, recon_model):
     writer = SummaryWriter(log_dir=args.run_dir / 'summary')
 
     # Parameter counting
-    logging.info('Reconstruction model parameters: total {}, of which {} trainable and {} untrainable'.format(
-        count_parameters(recon_model), count_trainable_parameters(recon_model),
-        count_untrainable_parameters(recon_model)))
+    logging.info('Inference model parameters: total {}, of which {} trainable and {} untrainable'.format(
+        count_parameters(infer_model), count_trainable_parameters(infer_model),
+        count_untrainable_parameters(infer_model)))
     logging.info('Policy model parameters: total {}, of which {} trainable and {} untrainable'.format(
         count_parameters(model), count_trainable_parameters(model), count_untrainable_parameters(model)))
 
@@ -294,24 +292,23 @@ def train_and_eval(args, infer_args, recon_model):
     train_loader = create_data_loader(args, 'train', shuffle=True)
     dev_loader = create_data_loader(args, 'val', shuffle=False)
 
-    train_data_range_dict = create_data_range_dict(args, train_loader)
-    dev_data_range_dict = create_data_range_dict(args, dev_loader)
-    print(train_data_range_dict)
+    # train_data_range_dict = create_data_range_dict(args, train_loader)
+    # dev_data_range_dict = create_data_range_dict(args, dev_loader)
+    # print(train_data_range_dict)
     if not args.resume:
         if args.do_train_ssim:
-            do_and_log_evaluation(args, -1, recon_model, model, train_loader, writer, 'Train', train_data_range_dict)
-        do_and_log_evaluation(args, -1, recon_model, model, dev_loader, writer, 'Val', dev_data_range_dict)
+            do_and_log_evaluation(args, -1, infer_model, model, train_loader, writer, 'Train')
+        do_and_log_evaluation(args, -1, infer_model, model, dev_loader, writer, 'Val')
 
     for epoch in range(start_epoch, args.num_epochs):
-        train_loss, train_time = train_epoch(args, epoch, recon_model, model, train_loader, optimiser, writer,
-                                             train_data_range_dict)
+        train_loss, train_time = train_epoch(args, epoch, infer_model, model, train_loader, optimiser, writer)
         logging.info(
             f'Epoch = [{epoch+1:3d}/{args.num_epochs:3d}] TrainLoss = {train_loss:.3g} TrainTime = {train_time:.2f}s '
         )
 
         if args.do_train_ssim:
-            do_and_log_evaluation(args, epoch, recon_model, model, train_loader, writer, 'Train', train_data_range_dict)
-        do_and_log_evaluation(args, epoch, recon_model, model, dev_loader, writer, 'Val', dev_data_range_dict)
+            do_and_log_evaluation(args, epoch, infer_model, model, train_loader, writer, 'Train')
+        do_and_log_evaluation(args, epoch, infer_model, model, dev_loader, writer, 'Val')
 
         scheduler.step()
         save_policy_model(args, args.run_dir, epoch, model, optimiser)
@@ -375,8 +372,8 @@ def main(args):
     Wrapper for training and testing of policy models.
     """
     logging.info(args)
-
-    infer_args, infer_model = load_infer_model(args)
+    # Reconstruction model
+    infer_args, infer_model = load_infer_model(args)    ##load classificatio model instead and save classification parameters
 
     # Policy model to train
     if args.do_train:
@@ -387,32 +384,33 @@ def main(args):
 
 def create_arg_parser():
     parser = argparse.ArgumentParser()
-
-    parser.add_argument('--resolution', default=[640, 356], type=list, help='Resolution of images')
+    parser.add_argument('--data_path', type=pathlib.Path, default='./Dataset/test_dataset')
+    parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.08, 0.04])
+    parser.add_argument('--accelerations', type=int, nargs='+', default=[4, 8])
+    parser.add_argument('--resolution', type=list, default=356)
+    parser.add_argument('--sample_rate', type=float, default=1.0)
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--val_batch_size', type=int, default=16)
+    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--num_classes', type=int, default=2)
+    parser.add_argument('--infer_model_checkpoint', type=str, default='../classification/log/modif_res50_single20_MT_knee_dropout/checkpoints/epoch=39-step=49400.ckpt')
+    parser.add_argument('--use_feature_map', type=bool, default=False)
+    parser.add_argument('--feature_map_layer', type=str, default='layer4')
     parser.add_argument('--dataset', default='knee', help='Dataset type to use.')
-    parser.add_argument('--data_path', type=pathlib.Path, required=True,
-                        help="Path to the dataset. Make sure to set this consistently with the 'dataset' "
-                             "argument above.")
-    parser.add_argument('--sample_rate', type=float, default=0.5,
-                        help='Fraction of total volumes to include')
+
     parser.add_argument('--acquisition', type=str2none, default=None,
                         help='Use only volumes acquired using the provided acquisition method. Options are: '
                              'CORPD_FBK, CORPDFS_FBK (fat-suppressed), and not provided (both used).')
-    parser.add_argument('--infer_model_checkpoint', type=pathlib.Path, required=True,
-                        help='Path to a pretrained inference model.')
+    parser.add_argument('--recon_model_checkpoint', type=pathlib.Path, required=True,
+                        help='Path to a pretrained reconstruction model.')
     parser.add_argument('--num_trajectories', type=int, default=8, help='Number of actions to sample every acquisition '
                         'step during training.')
     parser.add_argument('--report_interval', type=int, default=1000, help='Period of loss reporting')
-    parser.add_argument('--num_workers', type=int, default=4, help='Number of workers to use for data loading')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Which device to train on. Set to "cuda" to use the GPU')
     parser.add_argument('--exp_dir', type=pathlib.Path, default=None,
                         help='Directory where model and results should be saved. Will create a timestamped folder '
                         'in provided directory each run')
-    parser.add_argument('--accelerations', nargs='+', default=[8], type=int,
-                        help='Ratio of k-space columns to be sampled. If multiple values are '
-                             'provided, then one of those is chosen uniformly at random for '
-                             'each volume.')
     parser.add_argument('--reciprocals_in_center', nargs='+', default=[1], type=float,
                         help='Inverse fraction of rows (after subsampling) that should be in the center. E.g. if half '
                              'of the sampled rows should be in the center, this should be set to 2. All combinations '
@@ -423,8 +421,7 @@ def create_arg_parser():
                         'this too high will cause size mismatch errors, due to even-odd errors in calculation for '
                         'layer size post-flattening (due to max pooling).')
     parser.add_argument('--drop_prob', type=float, default=0, help='Dropout probability')
-    parser.add_argument('--batch_size', default=16, type=int, help='Mini batch size for training')
-    parser.add_argument('--val_batch_size', default=64, type=int, help='Mini batch size for validation')
+
     parser.add_argument('--weight_decay', type=float, default=0,
                         help='Strength of weight decay regularization.')
     parser.add_argument('--center_volume', type=str2bool, default=True,

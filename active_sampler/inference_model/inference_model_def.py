@@ -24,7 +24,7 @@ class GradCAMPPModel(nn.Module):
 
     def forward(self, input_tensor, targets=None):
         input_targets = [ClassifierOutputTarget(category) for category in targets.tolist()] if targets is not None else None
-        grayscale_cam = self.cam(input_tensor=input_tensor, targets=input_targets)
+        grayscale_cam = torch.tensor(self.cam(input_tensor=input_tensor, targets=input_targets)).unsqueeze(1)
         model_outputs = self.cam.outputs
         return grayscale_cam, F.softmax(model_outputs, dim=-1)
 

@@ -155,7 +155,7 @@ class SliceDataset(Dataset):
         return oversampled_raw_samples
 
 class DataTransform:
-    def __init__(self, mask_func, resolution = [640, 356], use_seed=False):
+    def __init__(self, mask_func, resolution, use_seed=False):
         self.mask_func = mask_func
         self.resolution = resolution
         self.use_seed = use_seed
@@ -163,7 +163,7 @@ class DataTransform:
     def __call__(self, kspace, mask, target, attrs, fname, dataslice, label):
         tensor_kspace = to_tensor(kspace)
         tensor_image = ifft2c(tensor_kspace)
-        crop_size = self.resolution
+        crop_size = [640, self.resolution]
         cropped_clean_image = complex_center_crop(tensor_image, crop_size)
         target_tensor_kspace = fft2c(cropped_clean_image)
         if mask is None and self.mask_func:
