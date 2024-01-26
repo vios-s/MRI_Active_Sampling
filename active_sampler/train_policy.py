@@ -13,7 +13,7 @@ import torch
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from src.helpers.torch_metrics import compute_ssim
+from src.helpers.torch_metrics import compute_cross_entropy, compute_accuracy
 from utils.utils import (add_mask_params, save_json, build_optim, count_parameters,
                                count_trainable_parameters, count_untrainable_parameters, str2bool, str2none)
 from data.data_loading import create_data_loader
@@ -110,7 +110,7 @@ def train_epoch(args, epoch, recon_model, model, loader, optimiser, writer, data
     return np.mean(epoch_loss), time.perf_counter() - start_epoch
 
 
-def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_range_dict):
+def evaluate(args, epoch, infer_model, model, loader, writer, partition):
     """
     Evaluates the policy on all slices in a validation or test dataset on the SSIM and PSNR metrics.
 
@@ -126,40 +126,39 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
     """
     metrics_dict_list = []
     model.eval()
-    ssims, psnrs = 0, 0
+    cross_entropy, accuracy = 0, 0
     tbs = 0  # data set size counter
     start = time.perf_counter()
     with torch.no_grad():
         for it, data in enumerate(loader):
-            kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, _ = data
+            kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, slice_info = data
+
             # shape after unsqueeze = batch x channel x columns x rows x complex
             kspace = kspace.unsqueeze(1).to(args.device)
             masked_kspace = masked_kspace.unsqueeze(1).to(args.device)
             mask = mask.unsqueeze(1).to(args.device)
+
             # shape after unsqueeze = batch x channel x columns x rows
-            zf = zf.unsqueeze(1).to(args.device)
-            gt = gt.unsqueeze(1).to(args.device)
-            gt_mean = gt_mean.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
-            gt_std = gt_std.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
-            unnorm_gt = gt * gt_std + gt_mean
-            data_range = torch.stack([data_range_dict[vol] for vol in fname])
+            zf = zf.to(args.device)
+
+            label = slice_info['label'].to(args.device)
+
             tbs += mask.size(0)
 
-            # Base reconstruction model forward pass
-            recons = recon_model(zf)
-            unnorm_recons = recons[:, :, :, :] * gt_std + gt_mean
-            init_ssim_val = compute_ssim(unnorm_recons, unnorm_gt, size_average=False,
-                                         data_range=data_range).mean(dim=(-1, -2)).sum()
-            # print(init_ssim_val)
-            init_psnr_val = compute_ssim(unnorm_recons, unnorm_gt, size_average=False,
-                                         data_range=data_range).mean(dim=(-1, -2)).sum()
+            # Base inference model forward pass
+            if args.use_feature_map:
+                feature_map, outputs = infer_model(zf)
+                image_input = feature_map
+            else:
+                outputs = infer_model(zf)
+                image_input = zf[:, 0, :, :].unsqueeze(1)
 
             init_cross_entropy_val = compute_cross_entropy(outputs, label).mean(dim=(-1, -2)).sum()
             batch_cross_entropy = [init_cross_entropy_val.item()]
 
 
             for step in range(args.acquisition_steps):
-                policy, probs = get_policy_probs(model, recons, mask)
+                policy, probs = get_policy_probs(model, image_input, mask)
                 if step == 0:
                     actions = torch.multinomial(probs.squeeze(1), args.num_test_trajectories, replacement=True)
                 else:
@@ -168,47 +167,47 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
                 # For evaluation we can treat greedy and non-greedy the same: in both cases we just simulate
                 # num_test_trajectories acquisition trajectories in parallel for each slice in the batch, and store
                 # the average cross entropy score every time step.
-                mask, masked_kspace, zf, outputs = compute_next_step_inference(infer_model, kspace,
-                                                                                   masked_kspace, mask, actions)
+                mask, masked_kspace, zf, image_input, outputs = compute_next_step_inference(infer_model, kspace,
+                                                                                   masked_kspace, mask, actions, args.use_feature_map)
 
                 cross_entropy_scores, accuracy_scores = compute_scores(args, outputs, label)
                 assert len(cross_entropy_scores) == 2
                 cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
                 accuracy_scores = accuracy_scores.mean(-1).sum()
                 # eventually shape = al_steps
-                batch_ssims.append(ssim_scores.item())
-                batch_psnrs.append(psnr_scores.item())
+                batch_cross_entropy.append(cross_entropy_scores.item())
+                batch_accuracy.append(accuracy_scores.item())
 
             # shape of al_steps
-            ssims += np.array(batch_ssims)
-            psnrs += np.array(batch_psnrs)
+            cross_entropy += np.array(batch_cross_entropy)
+            accuracy += np.array(batch_accuracy)
 
-    ssims /= tbs
-    psnrs /= tbs
+    cross_entropy /= tbs
+    accuracy /= tbs
 
     # Logging
     if partition in ['Val', 'Train']:
-        for step, val in enumerate(ssims):
-            writer.add_scalar(f'{partition}SSIM_step{step}', val, epoch)
-            writer.add_scalar(f'{partition}PSNR_step{step}', psnrs[step], epoch)
+        for step, val in enumerate(cross_entropy):
+            writer.add_scalar(f'{partition}cross_entropy_step{step}', val, epoch)
+            writer.add_scalar(f'{partition}accuracy_step{step}', accuracy[step], epoch)
 
         if args.wandb:
-            wandb.log({f'{partition.lower()}_ssims': {str(key): val for key, val in enumerate(ssims)}}, step=epoch + 1)
-            wandb.log({f'{partition.lower()}_psnrs': {str(key): val for key, val in enumerate(psnrs)}}, step=epoch + 1)
+            wandb.log({f'{partition.lower()}_cross_entropy': {str(key): val for key, val in enumerate(cross_entropy)}}, step=epoch + 1)
+            wandb.log({f'{partition.lower()}_accuracy': {str(key): val for key, val in enumerate(accuracy)}}, step=epoch + 1)
 
     elif partition == 'Test':
         # Only computed once, so loop over all epochs for wandb logging
         if args.wandb:
             for epoch in range(args.num_epochs):
-                wandb.log({f'{partition.lower()}_ssims': {str(key): val for key, val in enumerate(ssims)}},
-                          step=epoch + 1)
-                wandb.log({f'{partition.lower()}_psnrs': {str(key): val for key, val in enumerate(psnrs)}},
+                wandb.log({f'{partition.lower()}_cross_entropy': {str(key): val for key, val in enumerate(cross_entropy)}},
+                    step=epoch + 1)
+                wandb.log({f'{partition.lower()}_accuracy': {str(key): val for key, val in enumerate(accuracy)}},
                           step=epoch + 1)
 
     else:
         raise ValueError(f"'partition' should be in ['Train', 'Val', 'Test'], not: {partition}")
 
-    return ssims, psnrs, time.perf_counter() - start
+    return cross_entropy, accuracy, time.perf_counter() - start
 
 
 def train_and_eval(args, infer_args, infer_model):
@@ -317,15 +316,15 @@ def train_and_eval(args, infer_args, infer_model):
     writer.close()
 
 
-def do_and_log_evaluation(args, epoch, recon_model, model, loader, writer, partition, data_range_dict):
+def do_and_log_evaluation(args, epoch, infer_model, model, loader, writer, partition):
     """
     Helper function for logging.
     """
-    ssims, psnrs, score_time = evaluate(args, epoch, recon_model, model, loader, writer, partition, data_range_dict)
-    ssims_str = ", ".join(["{}: {:.4f}".format(i, l) for i, l in enumerate(ssims)])
-    psnrs_str = ", ".join(["{}: {:.3f}".format(i, l) for i, l in enumerate(psnrs)])
-    logging.info(f'{partition}SSIM = [{ssims_str}]')
-    logging.info(f'{partition}PSNR = [{psnrs_str}]')
+    cross_entropy, accuracy, score_time = evaluate(args, epoch, infer_model, model, loader, writer, partition)
+    cross_entropy_str = ", ".join(["{}: {:.4f}".format(i, l) for i, l in enumerate(cross_entropy)])
+    accuracy_str = ", ".join(["{}: {:.3f}".format(i, l) for i, l in enumerate(accuracy)])
+    logging.info(f'{partition}Cross Entropy = [{cross_entropy_str}]')
+    logging.info(f'{partition}Accuracy = [{accuracy_str}]')
     logging.info(f'{partition}ScoreTime = {score_time:.2f}s')
 
 
