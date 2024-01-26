@@ -48,3 +48,5 @@ for batch_idx, batch_data in enumerate(train_loader):
 
     print(np.shape(image_input), outputs)
 
+# torch.Size([32, 640, 356, 2]) torch.Size([32, 640, 356, 2]) torch.Size([32, 1, 356, 1]) torch.Size([32, 3, 640, 356]) torch.Size([32, 3, 640, 356])
+# torch.Size([16, 1, 128, 128, 2]) torch.Size([16, 1, 128, 128, 2]) torch.Size([16, 1, 1, 128, 1]) torch.Size([16, 1, 128, 128]) torch.Size([16, 1, 128, 128])

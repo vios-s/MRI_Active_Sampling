@@ -92,7 +92,11 @@ def acquire_rows_in_batch_parallel(k, mk, mask, to_acquire):
     return m_exp, mk_exp
 
 
+<<<<<<< c89bff3e29f397e1e93415b6500ad33eb2c9d276
 def compute_next_step_inference(infer_model, kspace, masked_kspace, mask, next_rows, use_feature_map):
+=======
+def compute_next_step_inference(infer_model, kspace, masked_kspace, mask, next_rows,use_feature_map):
+>>>>>>> merge
     # This computation is done by reshaping the masked k-space tensor to (batch . num_trajectories x 1 x res x res)
     # and then reshaping back after performing a reconstruction.
     mask, masked_kspace = acquire_rows_in_batch_parallel(kspace, masked_kspace, mask, next_rows)
