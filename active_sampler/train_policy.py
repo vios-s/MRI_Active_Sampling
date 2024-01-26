@@ -20,7 +20,7 @@ from data.data_loading import create_data_loader
 from inference_model.inference_model_utils import load_infer_model
 from policy_model.policy_model_utils import (build_policy_model, load_policy_model, save_policy_model,
                                                  compute_scores, create_data_range_dict, compute_backprop_trajectory,
-                                                 compute_next_step_reconstruction, get_policy_probs)
+                                                 compute_next_step_inference, get_policy_probs)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -124,6 +124,7 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
     :param data_range_dict: dictionary containing the dynamic range of every volume in the validation or test data.
     :return: (dict: average SSIMS per time step, dict: average PSNR per time step, float: evaluation duration)
     """
+    metrics_dict_list = []
     model.eval()
     ssims, psnrs = 0, 0
     tbs = 0  # data set size counter
@@ -153,8 +154,9 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
             init_psnr_val = compute_ssim(unnorm_recons, unnorm_gt, size_average=False,
                                          data_range=data_range).mean(dim=(-1, -2)).sum()
 
-            batch_ssims = [init_ssim_val.item()]
-            batch_psnrs = [init_psnr_val.item()]
+            init_cross_entropy_val = compute_cross_entropy(outputs, label).mean(dim=(-1, -2)).sum()
+            batch_cross_entropy = [init_cross_entropy_val.item()]
+
 
             for step in range(args.acquisition_steps):
                 policy, probs = get_policy_probs(model, recons, mask)
@@ -165,14 +167,14 @@ def evaluate(args, epoch, recon_model, model, loader, writer, partition, data_ra
                 # Samples trajectories in parallel
                 # For evaluation we can treat greedy and non-greedy the same: in both cases we just simulate
                 # num_test_trajectories acquisition trajectories in parallel for each slice in the batch, and store
-                # the average SSIM score every time step.
-                mask, masked_kspace, zf, recons = compute_next_step_reconstruction(recon_model, kspace,
+                # the average cross entropy score every time step.
+                mask, masked_kspace, zf, outputs = compute_next_step_inference(infer_model, kspace,
                                                                                    masked_kspace, mask, actions)
-                ssim_scores, psnr_scores = compute_scores(args, recons, gt_mean, gt_std, unnorm_gt, data_range,
-                                                          comp_psnr=True)
-                assert len(ssim_scores.shape) == 2
-                ssim_scores = ssim_scores.mean(-1).sum()
-                psnr_scores = psnr_scores.mean(-1).sum()
+
+                cross_entropy_scores, accuracy_scores = compute_scores(args, outputs, label)
+                assert len(cross_entropy_scores) == 2
+                cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
+                accuracy_scores = accuracy_scores.mean(-1).sum()
                 # eventually shape = al_steps
                 batch_ssims.append(ssim_scores.item())
                 batch_psnrs.append(psnr_scores.item())

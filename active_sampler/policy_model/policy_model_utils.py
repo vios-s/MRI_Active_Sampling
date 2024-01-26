@@ -2,11 +2,12 @@ import torch
 import random
 
 from .policy_model_def import build_policy_model
-from src.helpers import transforms
-from src.helpers.utils import build_optim
-from src.helpers.torch_metrics import compute_ssim, compute_psnr
-
-
+sys.path.append('..')
+from utils.utils import build_optim
+from utils.complex import complex_abs
+from utils.fft import fft2c, ifft2c
+from utils.transform_utils import to_tensor, complex_center_crop, normalize, normalize_instance
+from utils.torch_metrics import compute_cross_entropy,compute_metrics
 def save_policy_model(args, exp_dir, epoch, model, optimizer):
     torch.save(
         {
@@ -60,66 +61,72 @@ def load_policy_model(checkpoint_file, optim=False):
 
 def get_new_zf(masked_kspace_batch):
     # Inverse Fourier Transform to get zero filled solution
-    image_batch = transforms.ifft2(masked_kspace_batch)
-    # Absolute value
-    image_batch = transforms.complex_abs(image_batch)
+    image_batch = complex_abs(ifft2c(masked_kspace_batch))
     # Normalize input
-    image_batch, means, stds = transforms.normalize(image_batch, dim=(-2, -1), eps=1e-11)
+    image_batch, means, stds = normalize_instance(image_batch, eps=1e-11)
     image_batch = image_batch.clamp(-6, 6)
+    
     return image_batch, means, stds
 
 
 def acquire_rows_in_batch_parallel(k, mk, mask, to_acquire):
-    if mask.size(1) == mk.size(1) == to_acquire.size(1):
-        # Two cases:
-        # 1) We are only requesting a single k-space column to acquire per batch.
-        # 2) We are requesting multiple k-space columns per batch, and we are already in a trajectory of the non-greedy
-        # model: every column in to_acquire corresponds to an existing trajectory that we have sampled the next
-        # column for.
-        m_exp = mask
-        mk_exp = mk
-    else:
-        # We have to initialise trajectories: every row in to_acquire corresponds to a trajectory.
-        m_exp = mask.repeat(1, to_acquire.size(1), 1, 1, 1)
-        mk_exp = mk.repeat(1, to_acquire.size(1), 1, 1, 1)
+    # if mask.size(1) == mk.size(1) == to_acquire.size(1):
+    #     # Two cases:
+    #     # 1) We are only requesting a single k-space column to acquire per batch.
+    #     # 2) We are requesting multiple k-space columns per batch, and we are already in a trajectory of the non-greedy
+    #     # model: every column in to_acquire corresponds to an existing trajectory that we have sampled the next
+    #     # column for.
+    m_exp = mask
+    mk_exp = mk
+    # else:
+    #     # We have to initialise trajectories: every row in to_acquire corresponds to a trajectory.
+    #     m_exp = mask.repeat(1, to_acquire.size(1), 1, 1)
+    #     mk_exp = mk.repeat(1, to_acquire.size(1), 1, 1)
     # Loop over slices in batch
     for sl, rows in enumerate(to_acquire):
         # Loop over indices to acquire
         for index, row in enumerate(rows):  # Will only be single index if first case (see comment above)
-            m_exp[sl, index, :, row.item(), :] = 1.
-            mk_exp[sl, index, :, row.item(), :] = k[sl, 0, :, row.item(), :]
+            m_exp[sl, :, row.item(), :] = 1.
+            mk_exp[sl, :, row.item(), :] = k[sl, :, row.item(), :]
+            # mask size[32, 1, 356, 1] torch.Size([16, 1, 1, 128, 1])
     return m_exp, mk_exp
 
 
-def compute_next_step_reconstruction(recon_model, kspace, masked_kspace, mask, next_rows):
+def compute_next_step_inference(infer_model, kspace, masked_kspace, mask, next_rows, use_feature_map):
     # This computation is done by reshaping the masked k-space tensor to (batch . num_trajectories x 1 x res x res)
     # and then reshaping back after performing a reconstruction.
     mask, masked_kspace = acquire_rows_in_batch_parallel(kspace, masked_kspace, mask, next_rows)
-    channel_size = masked_kspace.shape[1]
+    # channel_size = masked_kspace.shape[1]
     res = masked_kspace.size(-2)
     # Combine batch and channel dimension for parallel computation if necessary
-    masked_kspace = masked_kspace.view(mask.size(0) * channel_size, 1, res, res, 2)
+    masked_kspace = masked_kspace.view(mask.size(0), 640, res, 2)
     zf, _, _ = get_new_zf(masked_kspace)
-    recon = recon_model(zf)
+    # Base inference model forward pass
+    if use_feature_map:
+        feature_map, outputs = infer_model(zf)
+        image_input = feature_map
+    else:
+        outputs = infer_model(zf)
+        image_input = zf[:, 0, :, :].unsqueeze(1)
 
     # Reshape back to B X C (=parallel acquisitions) x H x W
-    recon = recon.view(mask.size(0), channel_size, res, res)
-    zf = zf.view(mask.size(0), channel_size, res, res)
-    masked_kspace = masked_kspace.view(mask.size(0), channel_size, res, res, 2)
-    return mask, masked_kspace, zf, recon
+    image_input = image_input.view(mask.size(0), 1, 640, res)
+    zf = zf.view(mask.size(0),  1, 640, res)
+    masked_kspace = masked_kspace.view(mask.size(0), 640, res, 2)
+    return mask, masked_kspace, zf, image_input, outputs
 
 
-def get_policy_probs(model, recons, mask):
-    channel_size = mask.shape[1]
+def get_policy_probs(model, input_image, mask):
+    # mask size[32, 1, 356, 1] torch.Size([16, 1, 1, 128, 1])
     res = mask.size(-2)
     # Reshape trajectory dimension into batch dimension for parallel forward pass
-    recons = recons.view(mask.size(0) * channel_size, 1, res, res)
+    input_image = input_image.view(mask.size(0), 1, 640, res)
     # Obtain policy model logits
-    output = model(recons)
+    output = model(input_image)
     # Reshape trajectories back into their own dimension
-    output = output.view(mask.size(0), channel_size, res)
+    output = output.view(mask.size(0), 1, res)  #[batch,1,res]
     # Mask already acquired rows by setting logits to very negative numbers
-    loss_mask = (mask == 0).squeeze(-1).squeeze(-2).float()
+    loss_mask = (mask == 0).squeeze(-1).float()
     logits = torch.where(loss_mask.byte(), output, -1e7 * torch.ones_like(output))
     # Softmax over 'logits' representing row scores
     probs = torch.nn.functional.softmax(logits - logits.max(dim=-1, keepdim=True)[0], dim=-1)
