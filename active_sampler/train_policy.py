@@ -13,7 +13,7 @@ import torch
 import numpy as np
 from tensorboardX import SummaryWriter
 
-from src.helpers.torch_metrics import compute_cross_entropy, compute_accuracy
+from utils.torch_metrics import compute_cross_entropy, compute_batch_metrics
 from utils.utils import (add_mask_params, save_json, build_optim, count_parameters,
                                count_trainable_parameters, count_untrainable_parameters, str2bool, str2none)
 from data.data_loading import create_data_loader
@@ -26,7 +26,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def train_epoch(args, epoch, recon_model, model, loader, optimiser, writer, data_range_dict):
+def train_epoch(args, epoch, infer_model, model, loader, optimiser, writer):
     """
     Performs a single training epoch.
 
@@ -49,22 +49,29 @@ def train_epoch(args, epoch, recon_model, model, loader, optimiser, writer, data
     cbatch = 0  # Counter for spreading single backprop batch over multiple data loader batches
     for it, data in enumerate(loader):  # Loop over data points
         cbatch += 1
-        kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, _ = data
+        kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, slice_info = data
         # shape after unsqueeze = batch x channel x columns x rows x complex
         kspace = kspace.unsqueeze(1).to(args.device)
         masked_kspace = masked_kspace.unsqueeze(1).to(args.device)
         mask = mask.unsqueeze(1).to(args.device)
         # shape after unsqueeze = batch x channel x columns x rows
-        zf = zf.unsqueeze(1).to(args.device)
-        gt = gt.unsqueeze(1).to(args.device)
-        gt_mean = gt_mean.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
-        gt_std = gt_std.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
-        unnorm_gt = gt * gt_std + gt_mean  # Unnormalise ground truth image for SSIM calculations
-        data_range = torch.stack([data_range_dict[vol] for vol in fname])  # For SSIM calculations
-
-        # Base reconstruction model forward pass: input to policy model
-        recons = recon_model(zf)
-        print(np.shape(recons))
+        zf = zf.to(args.device)
+        gt = gt.to(args.device)
+        label = slice_info['label'].to(args.device)
+        # gt_mean = gt_mean.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
+        # gt_std = gt_std.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
+        # unnorm_gt = gt * gt_std + gt_mean  # Unnormalise ground truth image for SSIM calculations
+        # data_range = torch.stack([data_range_dict[vol] for vol in fname])  # For SSIM calculations
+        # Base inference model forward pass
+        if args.use_feature_map:
+            feature_map, outputs = infer_model(zf,label)
+            image_input = feature_map
+        else:
+            outputs = infer_model(zf)
+            image_input = zf[:, 0, :, :].unsqueeze(1)
+        # # Base reconstruction model forward pass: input to policy model
+        # recons = recon_model(zf)
+        # print(np.shape(recons))
 
         if cbatch == 1:  # Only after backprop is performed
             optimiser.zero_grad()
@@ -73,9 +80,7 @@ def train_epoch(args, epoch, recon_model, model, loader, optimiser, writer, data
         logprob_list = []
         reward_list = []
         for step in range(args.acquisition_steps):  # Loop over acquisition steps
-            loss, mask, masked_kspace, recons = compute_backprop_trajectory(args, kspace, masked_kspace, mask,
-                                                                            unnorm_gt, recons, gt_mean, gt_std,
-                                                                            data_range, model, recon_model, step,
+            loss, mask, masked_kspace,  image_input, outputs = compute_backprop_trajectory(args, kspace, masked_kspace, mask, outputs, image_input, label, model, infer_model, step,
                                                                             action_list, logprob_list, reward_list)
             # Loss logging
             epoch_loss[step] += loss.item() / len(loader) * gt.size(0) / args.batch_size
@@ -124,7 +129,6 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
     :param data_range_dict: dictionary containing the dynamic range of every volume in the validation or test data.
     :return: (dict: average SSIMS per time step, dict: average PSNR per time step, float: evaluation duration)
     """
-    metrics_dict_list = []
     model.eval()
     cross_entropy, accuracy = 0, 0
     tbs = 0  # data set size counter
@@ -153,8 +157,10 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
                 outputs = infer_model(zf)
                 image_input = zf[:, 0, :, :].unsqueeze(1)
 
-            init_cross_entropy_val = compute_cross_entropy(outputs, label).mean(dim=(-1, -2)).sum()
+            init_cross_entropy_val = compute_cross_entropy(outputs, label).mean(-1).sum()
             batch_cross_entropy = [init_cross_entropy_val.item()]
+            init_acc_val = compute_batch_metrics(outputs, label)['accuracy']
+            batch_accuracy = [init_acc_val.item()]
 
 
             for step in range(args.acquisition_steps):
@@ -170,17 +176,23 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
                 mask, masked_kspace, zf, image_input, outputs = compute_next_step_inference(infer_model, kspace,
                                                                                    masked_kspace, mask, actions, args.use_feature_map)
 
-                cross_entropy_scores, accuracy_scores = compute_scores(args, outputs, label)
-                assert len(cross_entropy_scores) == 2
-                cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
-                accuracy_scores = accuracy_scores.mean(-1).sum()
-                # eventually shape = al_steps
+                cross_entropy_scores, metrics_scores = compute_scores(args, outputs, label)
+                print(cross_entropy_scores)
+                # assert len(cross_entropy_scores) == 2
+                # cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
+                accuracy_scores = metrics_scores['accuracy']
+
+
+                # Append to lists
                 batch_cross_entropy.append(cross_entropy_scores.item())
-                batch_accuracy.append(accuracy_scores.item())
+                batch_accuracy.append(accuracy_scores)
+
+
 
             # shape of al_steps
             cross_entropy += np.array(batch_cross_entropy)
             accuracy += np.array(batch_accuracy)
+            # batch_confusion_matrix += np.array(batch_confusion_matrix) need to add more metrics
 
     cross_entropy /= tbs
     accuracy /= tbs
@@ -328,7 +340,7 @@ def do_and_log_evaluation(args, epoch, infer_model, model, loader, writer, parti
     logging.info(f'{partition}ScoreTime = {score_time:.2f}s')
 
 
-def test(args, recon_model):
+def test(args, infer_model):
     """
     Performs evaluation of a pre-trained policy model.
 
@@ -344,7 +356,7 @@ def test(args, recon_model):
 
     # Logging of policy model
     logging.info(args)
-    logging.info(recon_model)
+    logging.info(infer_model)
     logging.info(model)
     if args.wandb:
         wandb.config.update(args)
@@ -353,17 +365,17 @@ def test(args, recon_model):
     writer = SummaryWriter(log_dir=policy_args.run_dir / 'summary')
 
     # Parameter counting
-    logging.info('Reconstruction model parameters: total {}, of which {} trainable and {} untrainable'.format(
-        count_parameters(recon_model), count_trainable_parameters(recon_model),
-        count_untrainable_parameters(recon_model)))
+    logging.info('Inference model parameters: total {}, of which {} trainable and {} untrainable'.format(
+        count_parameters(infer_model), count_trainable_parameters(infer_model),
+        count_untrainable_parameters(infer_model)))
     logging.info('Policy model parameters: total {}, of which {} trainable and {} untrainable'.format(
         count_parameters(model), count_trainable_parameters(model), count_untrainable_parameters(model)))
 
     # Create data loader
     test_loader = create_data_loader(policy_args, 'test', shuffle=False)
-    test_data_range_dict = create_data_range_dict(policy_args, test_loader)
+    # test_data_range_dict = create_data_range_dict(policy_args, test_loader)
 
-    do_and_log_evaluation(policy_args, -1, recon_model, model, test_loader, writer, 'Test', test_data_range_dict)
+    do_and_log_evaluation(policy_args, -1, infer_model, model, test_loader, writer, 'Test')
 
     writer.close()
 
@@ -374,7 +386,9 @@ def main(args):
     """
     logging.info(args)
     # Reconstruction model
-    infer_args, infer_model = load_infer_model(args)    ##load classificatio model instead and save classification parameters
+    infer_args, infer_model = load_infer_model(args)
+    infer_model = infer_model.to(args.device)
+    ##load classificatio model instead and save classification parameters
 
     # Policy model to train
     if args.do_train:
