@@ -14,6 +14,7 @@ from pytorch_grad_cam.utils.model_targets import ClassifierOutputTarget
 import torch.nn.functional as F
 from torchvision import models  # Assuming you have a ResNet50 model implementation
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class GradCAMPPModel(nn.Module):
     def __init__(self, model, target_layers):
@@ -24,9 +25,64 @@ class GradCAMPPModel(nn.Module):
 
     def forward(self, input_tensor, targets=None):
         input_targets = [ClassifierOutputTarget(category) for category in targets.tolist()] if targets is not None else None
-        grayscale_cam = torch.tensor(self.cam(input_tensor=input_tensor, targets=input_targets)).unsqueeze(1)
+        grayscale_cam = torch.tensor(self.cam(input_tensor=input_tensor.requires_grad_(), targets=input_targets)).unsqueeze(1)
         model_outputs = self.cam.outputs
         return grayscale_cam, F.softmax(model_outputs, dim=-1)
+
+
+class FeatureMapPiler(nn.Module):
+    def __init__(self, model, target_layer_names):
+        super(FeatureMapPiler, self).__init__()
+        self.model = model
+        self.target_layer_names = target_layer_names
+        self.feature_maps = []
+
+        # Register hooks to the target layers
+        self.hook_handlers = []
+        self.register_hooks()
+
+    def register_hooks(self):
+        def hook(name):
+            def hook_fn(module, input, output):
+                self.feature_maps.append((name, output))
+            return hook_fn
+
+        for name in self.target_layer_names:
+            layer = self.find_layer_by_name(self.model, name)
+            if layer is not None:
+                hook_handler = layer.register_forward_hook(hook(name))
+                self.hook_handlers.append(hook_handler)
+            else:
+                raise ValueError(f"Target layer '{name}' not found in the model.")
+
+    def find_layer_by_name(self, model, target_name):
+        for name, module in model.named_modules():
+            if name == target_name:
+                return module
+        return None
+
+    def remove_hooks(self):
+        for handler in self.hook_handlers:
+            handler.remove()
+
+    def forward(self, x):
+        with torch.no_grad():
+            self.feature_maps = []  # Clear previous feature maps
+            model_outputs = self.model(x)
+            self.remove_hooks()
+
+        # Concatenate and resize feature maps
+        resized_feature_maps = []
+        target_size = x.size()[2:]  # Size of the input image
+        for _, feature_map in self.feature_maps:
+            resized_feature_map = F.interpolate(feature_map, size=target_size, mode='bilinear', align_corners=False)
+            resized_feature_maps.append(resized_feature_map)
+
+        # Concatenate along the channel dimension
+        concatenated_feature_maps = torch.cat(resized_feature_maps, dim=1)
+        return concatenated_feature_maps, F.softmax(model_outputs, dim=-1)
+
+
 
 
 
@@ -92,8 +148,9 @@ class ResNet50Module(nn.Module):
 
 
     def forward(self, image):
-        # Assuming binary classification, use softmax activation for probabilities
-        return F.softmax(self.resnet50(image), dim=-1)
+        with torch.no_grad():
+            # Assuming binary classification, use softmax activation for probabilities
+            return F.softmax(self.resnet50(image), dim=-1)
 
 
 def build_inference_optimizer(params, args):

@@ -1,8 +1,9 @@
 import torch
 import h5py
 import numpy as np
-from .inference_model_def import build_inference_model,build_inference_optimizer,GradCAMPPModel
+from .inference_model_def import build_inference_model, build_inference_optimizer, GradCAMPPModel, FeatureMapPiler
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 def load_infer_model(args, optim=False):
     checkpoint = torch.load(args.infer_model_checkpoint)
@@ -27,11 +28,10 @@ def load_infer_model(args, optim=False):
     del checkpoint
 
     if args.use_feature_map:
+        final_infer_model = FeatureMapPiler(infer_model.resnet50.to(device), args.feature_map_layer)
+    elif args.use_feature_map == False & args.use_grad_campp:
         target_layers = [getattr(infer_model.resnet50, args.feature_map_layer)[-1]]
-        for layer in target_layers:
-            for param in layer.parameters():
-                param.requires_grad = True
-        final_infer_model = GradCAMPPModel(model=infer_model.resnet50, target_layers=target_layers)
+        final_infer_model = GradCAMPPModel(model=infer_model.resnet50.to(device), target_layers=target_layers)
     else:
         final_infer_model = infer_model
     print('\n')

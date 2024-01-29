@@ -174,7 +174,7 @@ class DataTransform:
         zf = complex_abs(ifft2c(masked_kspace))
 
         zf, zf_mean, zf_std = normalize_instance(zf, eps=1e-11)
-        zf = zf.clamp(-6, 6)
+        # zf = zf.clamp(-6, 6)
         target, gt_mean, gt_std = normalize_instance(target, eps=1e-11)
         target = target.clamp(-6, 6)
 

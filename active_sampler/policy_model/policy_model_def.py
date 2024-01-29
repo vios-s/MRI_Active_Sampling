@@ -92,7 +92,6 @@ class PolicyModel(nn.Module):
             self.down_sample_layers += [ConvBlock(ch, ch * 2, drop_prob, pool_size=self.pool_size)]
             # Keep track of number of output neurons
             # self.flattened_size = self.flattened_size * 2 // self.pool_size ** 2
-            # self.flattened_size = (self.flattened_size // self.pool_size) ** 2 * ch
             ch *= 2
         self.flattened_size = 256*40*22
         self.fc_out = nn.Sequential(
@@ -120,7 +119,6 @@ class PolicyModel(nn.Module):
         for layer in self.down_sample_layers:
             image_emb = layer(image_emb)
         # Print the shape of image_emb before passing it to fc_out
-        print("Shape before fc_out:", image_emb.shape)
         image_emb = self.fc_out(image_emb.flatten(start_dim=1))  # flatten all but batch dimension
         assert len(image_emb.shape) == 2
         return image_emb

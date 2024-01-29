@@ -58,17 +58,14 @@ def train_epoch(args, epoch, infer_model, model, loader, optimiser, writer):
         zf = zf.to(args.device)
         gt = gt.to(args.device)
         label = slice_info['label'].to(args.device)
-        # gt_mean = gt_mean.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
-        # gt_std = gt_std.unsqueeze(1).unsqueeze(2).unsqueeze(3).to(args.device)
-        # unnorm_gt = gt * gt_std + gt_mean  # Unnormalise ground truth image for SSIM calculations
-        # data_range = torch.stack([data_range_dict[vol] for vol in fname])  # For SSIM calculations
         # Base inference model forward pass
-        if args.use_feature_map:
-            feature_map, outputs = infer_model(zf,label)
-            image_input = feature_map
-        else:
-            outputs = infer_model(zf)
-            image_input = zf[:, 0, :, :].unsqueeze(1)
+        with torch.no_grad():
+            if args.use_feature_map:
+                feature_map, outputs = infer_model(zf,label)
+                image_input = feature_map
+            else:
+                outputs = infer_model(zf)
+                image_input = zf[:, 0, :, :].unsqueeze(1)
         # # Base reconstruction model forward pass: input to policy model
         # recons = recon_model(zf)
         # print(np.shape(recons))
@@ -157,10 +154,10 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
                 outputs = infer_model(zf)
                 image_input = zf[:, 0, :, :].unsqueeze(1)
 
-            init_cross_entropy_val = compute_cross_entropy(outputs, label).mean(-1).sum()
-            batch_cross_entropy = [init_cross_entropy_val.item()]
+            init_cross_entropy_val = compute_cross_entropy(outputs, label)
+            batch_cross_entropy = [init_cross_entropy_val]
             init_acc_val = compute_batch_metrics(outputs, label)['accuracy']
-            batch_accuracy = [init_acc_val.item()]
+            batch_accuracy = [init_acc_val]
 
 
             for step in range(args.acquisition_steps):
@@ -177,22 +174,21 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
                                                                                    masked_kspace, mask, actions, args.use_feature_map)
 
                 cross_entropy_scores, metrics_scores = compute_scores(args, outputs, label)
-                print(cross_entropy_scores)
                 # assert len(cross_entropy_scores) == 2
                 # cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
                 accuracy_scores = metrics_scores['accuracy']
 
 
                 # Append to lists
-                batch_cross_entropy.append(cross_entropy_scores.item())
+                batch_cross_entropy.append(cross_entropy_scores)
                 batch_accuracy.append(accuracy_scores)
 
 
 
-            # shape of al_steps
-            cross_entropy += np.array(batch_cross_entropy)
-            accuracy += np.array(batch_accuracy)
-            # batch_confusion_matrix += np.array(batch_confusion_matrix) need to add more metrics
+        # shape of al_steps
+        cross_entropy += np.array(batch_cross_entropy)
+        accuracy += np.array(batch_accuracy)
+        # batch_confusion_matrix += np.array(batch_confusion_matrix) need to add more metrics
 
     cross_entropy /= tbs
     accuracy /= tbs
@@ -400,30 +396,29 @@ def main(args):
 def create_arg_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('--data_path', type=pathlib.Path, default='./Dataset/test_dataset')
-    parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.08, 0.04])
-    parser.add_argument('--accelerations', type=int, nargs='+', default=[4, 8])
+    parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.1, 0.1, 0.1, 0.1, 0.1])
+    parser.add_argument('--accelerations', type=int, nargs='+', default=[4, 6, 8, 10, 20])
     parser.add_argument('--resolution', type=list, default=356)
     parser.add_argument('--sample_rate', type=float, default=1.0)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--val_batch_size', type=int, default=16)
-    parser.add_argument('--num_workers', type=int, default=0)
+    parser.add_argument('--num_workers', type=int, default=4)
     parser.add_argument('--num_classes', type=int, default=2)
-    parser.add_argument('--infer_model_checkpoint', type=str, default='../classification/log/modif_res50_single20_MT_knee_dropout/checkpoints/epoch=39-step=49400.ckpt')
-    parser.add_argument('--use_feature_map', type=bool, default=False)
-    parser.add_argument('--feature_map_layer', type=str, default='layer4')
+    parser.add_argument('--infer_model_checkpoint', type=str, default='../classification/log/0123_modif_res50_center01_multi_MT_knee_dropout/checkpoints/epoch=29-step=49770.ckpt')
+    parser.add_argument('--use_feature_map', type=bool, default=True)
+    parser.add_argument('--use_grad_campp', type=bool, default=False)
+    parser.add_argument('--feature_map_layer', type=str, default=['layer4'])
     parser.add_argument('--dataset', default='knee', help='Dataset type to use.')
 
     parser.add_argument('--acquisition', type=str2none, default=None,
                         help='Use only volumes acquired using the provided acquisition method. Options are: '
                              'CORPD_FBK, CORPDFS_FBK (fat-suppressed), and not provided (both used).')
-    parser.add_argument('--recon_model_checkpoint', type=pathlib.Path, required=True,
-                        help='Path to a pretrained reconstruction model.')
     parser.add_argument('--num_trajectories', type=int, default=8, help='Number of actions to sample every acquisition '
                         'step during training.')
     parser.add_argument('--report_interval', type=int, default=1000, help='Period of loss reporting')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Which device to train on. Set to "cuda" to use the GPU')
-    parser.add_argument('--exp_dir', type=pathlib.Path, default=None,
+    parser.add_argument('--exp_dir', type=pathlib.Path, default='./log/test',
                         help='Directory where model and results should be saved. Will create a timestamped folder '
                         'in provided directory each run')
     parser.add_argument('--reciprocals_in_center', nargs='+', default=[1], type=float,
