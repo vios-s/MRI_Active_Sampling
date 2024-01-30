@@ -75,11 +75,13 @@ class FeatureMapPiler(nn.Module):
         resized_feature_maps = []
         target_size = x.size()[2:]  # Size of the input image
         for _, feature_map in self.feature_maps:
-            resized_feature_map = F.interpolate(feature_map, size=target_size, mode='bilinear', align_corners=False)
+            resized_feature_map = F.interpolate(feature_map.mean(dim=1).unsqueeze(1), size=target_size, mode='bilinear', align_corners=False)
+            print(resized_feature_map)
             resized_feature_maps.append(resized_feature_map)
 
         # Concatenate along the channel dimension
         concatenated_feature_maps = torch.cat(resized_feature_maps, dim=1)
+
         return concatenated_feature_maps, F.softmax(model_outputs, dim=-1)
 
 

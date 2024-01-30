@@ -1,6 +1,8 @@
 import torch
 import random
 import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
 import sys
 from .policy_model_def import build_policy_model
 sys.path.append('..')
@@ -95,27 +97,37 @@ def acquire_rows_in_batch_parallel(k, mk, mask, to_acquire):
 
 
 def compute_next_step_inference(infer_model, kspace, masked_kspace, mask, next_rows,use_feature_map):
-    # This computation is done by reshaping the masked k-space tensor to (batch . num_trajectories x 1 x res x res)
+    # This computation is done by reshaping the masked k-space tensor to (batch . num_trajectories x 1 x 640 x res)
     # and then reshaping back after performing a reconstruction.
+    image_input = []
+    outputs = []
+    zf = []
     mask, masked_kspace = acquire_rows_in_batch_parallel(kspace, masked_kspace, mask, next_rows)
     channel_size = masked_kspace.shape[1]
     res = masked_kspace.size(-2)
     # Combine batch and channel dimension for parallel computation if necessary
-    masked_kspace = masked_kspace.view(mask.size(0) * channel_size, 1, 640, res, 2)
-    zf, _, _ = get_new_zf(masked_kspace)
-    # Base inference model forward pass
-    if use_feature_map:
-        feature_map, outputs = infer_model(zf)
-        image_input = feature_map
-    else:
-        outputs = infer_model(zf)
-        image_input = zf[:, 0, :, :].unsqueeze(1)
-
-    # Reshape back to B X C (=parallel acquisitions) x H x W
-    image_input = image_input.view(mask.size(0), channel_size, 640, res)
-    zf = zf[:, 0, :, :].unsqueeze(1).view(mask.size(0),  channel_size, 640, res)
     masked_kspace = masked_kspace.view(mask.size(0), channel_size, 640, res, 2)
-    return mask, masked_kspace, zf, image_input, outputs
+    for num in range(channel_size):
+        single_mp = masked_kspace[:,num].unsqueeze(1)
+        single_zf, _, _ = get_new_zf(single_mp)
+    # Base inference model forward pass
+        if use_feature_map:
+            single_feature_map, single_outputs = infer_model(single_zf)
+        else:
+            single_outputs = infer_model(single_zf)
+            single_feature_map = single_zf[:, 0, :, :].unsqueeze(1)
+        image_input.append(single_feature_map)
+        outputs.append(single_outputs)
+        zf.append(single_zf[:, 0, :, :].unsqueeze(1))
+    # Reshape back to B X C (=parallel acquisitions) x H x W
+    outputs = torch.stack(outputs, dim=1)
+    image_input = torch.stack(image_input, dim=1)
+    zf = torch.stack(zf, dim=1)
+
+    image_input = image_input.view(mask.size(0), channel_size, 640, res)
+    zf = zf.view(mask.size(0),  channel_size, 640, res)
+    masked_kspace = masked_kspace.view(mask.size(0), channel_size, 640, res, 2)
+    return mask, masked_kspace, zf, image_input, outputs.squeeze()
 
 
 def get_policy_probs(model, input_image, mask):
@@ -145,27 +157,13 @@ def compute_scores(args, outputs, label):
     return cross_entropy, metrics
 
 
-def create_data_range_dict(args, loader):
-    # Locate ground truths of a volume
-    gt_vol_dict = {}
-    for it, data in enumerate(loader):
-        kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, slice = data
-        for i, vol in enumerate(fname):
-            if vol not in gt_vol_dict:
-                gt_vol_dict[vol] = []
-            gt_vol_dict[vol].append(gt[i] * gt_std[i] + gt_mean[i])
-    # Find max of a volume
-    data_range_dict = {}
-    for vol, gts in gt_vol_dict.items():
-        # Shape 1 x 1 x 1 x 1
-        data_range_dict[vol] = torch.stack(gts).max().unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).to(args.device)
-    del gt_vol_dict
-    return data_range_dict
 
 
 def compute_backprop_trajectory(args, kspace, masked_kspace, mask, outputs, image_input, label, model, infer_model, step, action_list, logprob_list, reward_list):
+    cross_entropy_scores = []
+    criteria = nn.BCELoss(reduction='none')
     # Base score from which to calculate acquisition rewards
-    base_scores, _ = compute_scores(args, outputs, label)
+    base_scores = criteria(outputs, F.one_hot(label, outputs.shape[-1]).float()).mean(dim=-1)
     # Get policy and probabilities.
     policy, probs = get_policy_probs(model, image_input, mask)
     # Sample actions from the policy. For greedy (or at step = 0) we sample num_trajectories actions from the
@@ -191,11 +189,12 @@ def compute_backprop_trajectory(args, kspace, masked_kspace, mask, outputs, imag
     mask, masked_kspace, zf, image_input, outputs = compute_next_step_inference(infer_model, kspace,
                                                                                 masked_kspace, mask, actions,
                                                                                 args.use_feature_map)
-
-    cross_entropy_scores, _ = compute_scores(args, outputs, label)
-
+    for ch in range(masked_kspace.shape[1]):
+        single_cross_entropy_scores = criteria(outputs[:, ch, :], F.one_hot(label, outputs.shape[-1]).float())
+        cross_entropy_scores.append(single_cross_entropy_scores.mean(dim=-1))
     # batch x num_trajectories
-    action_rewards = base_scores - cross_entropy_scores
+    action_rewards = base_scores.unsqueeze(-1) - torch.stack(cross_entropy_scores,dim=0).transpose(1,0)
+    # print(action_rewards.shape)
     # batch x 1
     avg_reward = torch.mean(action_rewards, dim=-1, keepdim=True)
     # Store for non-greedy model (we need the full return before we can do a backprop step)
@@ -222,9 +221,10 @@ def compute_backprop_trajectory(args, kspace, masked_kspace, mask, outputs, imag
         # For non-greedy we will continue with the parallel sampled rows stored in masked_kspace, and
         # with mask, zf, and recons.
         idx = random.randint(0, mask.shape[1] - 1)
-        mask = mask[:, idx:idx + 1, :, :, :]
-        masked_kspace = masked_kspace[:, idx:idx + 1, :, :, :]
-        image_input = image_input[:, idx:idx + 1, :, :]
+        mask = mask[:, idx, :, :, :].unsqueeze(1)
+        masked_kspace = masked_kspace[:, idx, :, :, :].unsqueeze(1)
+        image_input = image_input[:, idx, :, :].unsqueeze(1)
+        outputs = outputs[:, idx, :]
 
     elif step != args.acquisition_steps - 1:  # Non-greedy but don't have full return yet.
         loss = torch.zeros(1)  # For logging
@@ -252,5 +252,4 @@ def compute_backprop_trajectory(args, kspace, masked_kspace, mask, outputs, imag
             # Divide by batches_step to mimic taking mean over larger batch
             loss = loss.mean() / args.batches_step
             loss.backward()  # Store gradients
-
     return loss, mask, masked_kspace, image_input, outputs

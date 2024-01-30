@@ -8,7 +8,7 @@ import pathlib
 import wandb
 from random import choice
 from string import ascii_uppercase
-
+import os
 import torch
 import numpy as np
 from tensorboardX import SummaryWriter
@@ -19,12 +19,13 @@ from utils.utils import (add_mask_params, save_json, build_optim, count_paramete
 from data.data_loading import create_data_loader
 from inference_model.inference_model_utils import load_infer_model
 from policy_model.policy_model_utils import (build_policy_model, load_policy_model, save_policy_model,
-                                                 compute_scores, create_data_range_dict, compute_backprop_trajectory,
+                                                 compute_scores, compute_backprop_trajectory,
                                                  compute_next_step_inference, get_policy_probs)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 
 def train_epoch(args, epoch, infer_model, model, loader, optimiser, writer):
     """
@@ -59,16 +60,12 @@ def train_epoch(args, epoch, infer_model, model, loader, optimiser, writer):
         gt = gt.to(args.device)
         label = slice_info['label'].to(args.device)
         # Base inference model forward pass
-        with torch.no_grad():
-            if args.use_feature_map:
-                feature_map, outputs = infer_model(zf,label)
-                image_input = feature_map
-            else:
-                outputs = infer_model(zf)
-                image_input = zf[:, 0, :, :].unsqueeze(1)
-        # # Base reconstruction model forward pass: input to policy model
-        # recons = recon_model(zf)
-        # print(np.shape(recons))
+        if args.use_feature_map:
+            feature_map, outputs = infer_model(zf,label)
+            image_input = feature_map
+        else:
+            outputs = infer_model(zf)
+            image_input = zf[:, 0, :, :].unsqueeze(1)
 
         if cbatch == 1:  # Only after backprop is performed
             optimiser.zero_grad()
@@ -130,22 +127,22 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
     cross_entropy, accuracy = 0, 0
     tbs = 0  # data set size counter
     start = time.perf_counter()
-    with torch.no_grad():
-        for it, data in enumerate(loader):
-            kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, slice_info = data
 
-            # shape after unsqueeze = batch x channel x columns x rows x complex
-            kspace = kspace.unsqueeze(1).to(args.device)
-            masked_kspace = masked_kspace.unsqueeze(1).to(args.device)
-            mask = mask.unsqueeze(1).to(args.device)
+    for it, data in enumerate(loader):
+        kspace, masked_kspace, mask, zf, gt, gt_mean, gt_std, fname, slice_info = data
 
-            # shape after unsqueeze = batch x channel x columns x rows
-            zf = zf.to(args.device)
+        # shape after unsqueeze = batch x channel x columns x rows x complex
+        kspace = kspace.unsqueeze(1).to(args.device)
+        masked_kspace = masked_kspace.unsqueeze(1).to(args.device)
+        mask = mask.unsqueeze(1).to(args.device)
 
-            label = slice_info['label'].to(args.device)
+        # shape after unsqueeze = batch x channel x columns x rows
+        zf = zf.to(args.device)
 
-            tbs += mask.size(0)
+        label = slice_info['label'].to(args.device)
 
+        tbs += mask.size(0)
+        with torch.no_grad():
             # Base inference model forward pass
             if args.use_feature_map:
                 feature_map, outputs = infer_model(zf)
@@ -153,35 +150,35 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
             else:
                 outputs = infer_model(zf)
                 image_input = zf[:, 0, :, :].unsqueeze(1)
-
-            init_cross_entropy_val = compute_cross_entropy(outputs, label)
-            batch_cross_entropy = [init_cross_entropy_val]
-            init_acc_val = compute_batch_metrics(outputs, label)['accuracy']
-            batch_accuracy = [init_acc_val]
-
-
-            for step in range(args.acquisition_steps):
-                policy, probs = get_policy_probs(model, image_input, mask)
-                if step == 0:
-                    actions = torch.multinomial(probs.squeeze(1), args.num_test_trajectories, replacement=True)
-                else:
-                    actions = policy.sample()
-                # Samples trajectories in parallel
-                # For evaluation we can treat greedy and non-greedy the same: in both cases we just simulate
-                # num_test_trajectories acquisition trajectories in parallel for each slice in the batch, and store
-                # the average cross entropy score every time step.
-                mask, masked_kspace, zf, image_input, outputs = compute_next_step_inference(infer_model, kspace,
-                                                                                   masked_kspace, mask, actions, args.use_feature_map)
-
-                cross_entropy_scores, metrics_scores = compute_scores(args, outputs, label)
-                # assert len(cross_entropy_scores) == 2
-                # cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
-                accuracy_scores = metrics_scores['accuracy']
+        # print(outputs)
+        init_cross_entropy_val = compute_cross_entropy(outputs, label)
+        batch_cross_entropy = [init_cross_entropy_val]
+        init_acc_val = compute_batch_metrics(outputs, label)['accuracy']
+        batch_accuracy = [init_acc_val]
 
 
-                # Append to lists
-                batch_cross_entropy.append(cross_entropy_scores)
-                batch_accuracy.append(accuracy_scores)
+        for step in range(args.acquisition_steps):
+            policy, probs = get_policy_probs(model, image_input, mask)
+            if step == 0:
+                actions = torch.multinomial(probs.squeeze(1), args.num_test_trajectories, replacement=True)
+            else:
+                actions = policy.sample()
+            # Samples trajectories in parallel
+            # For evaluation we can treat greedy and non-greedy the same: in both cases we just simulate
+            # num_test_trajectories acquisition trajectories in parallel for each slice in the batch, and store
+            # the average cross entropy score every time step.
+            mask, masked_kspace, zf, image_input, outputs = compute_next_step_inference(infer_model, kspace,
+                                                                               masked_kspace, mask, actions, args.use_feature_map)
+
+            cross_entropy_scores, metrics_scores = compute_scores(args, outputs, label)
+            # assert len(cross_entropy_scores) == 2
+            # cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
+            accuracy_scores = metrics_scores['accuracy']
+
+
+            # Append to lists
+            batch_cross_entropy.append(cross_entropy_scores)
+            batch_accuracy.append(accuracy_scores)
 
 
 
@@ -301,9 +298,6 @@ def train_and_eval(args, infer_args, infer_model):
     train_loader = create_data_loader(args, 'train', shuffle=True)
     dev_loader = create_data_loader(args, 'val', shuffle=False)
 
-    # train_data_range_dict = create_data_range_dict(args, train_loader)
-    # dev_data_range_dict = create_data_range_dict(args, dev_loader)
-    # print(train_data_range_dict)
     if not args.resume:
         if args.do_train_ssim:
             do_and_log_evaluation(args, -1, infer_model, model, train_loader, writer, 'Train')
@@ -402,18 +396,18 @@ def create_arg_parser():
     parser.add_argument('--sample_rate', type=float, default=1.0)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--val_batch_size', type=int, default=16)
-    parser.add_argument('--num_workers', type=int, default=4)
+    parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--num_classes', type=int, default=2)
     parser.add_argument('--infer_model_checkpoint', type=str, default='../classification/log/0123_modif_res50_center01_multi_MT_knee_dropout/checkpoints/epoch=29-step=49770.ckpt')
-    parser.add_argument('--use_feature_map', type=bool, default=True)
+    parser.add_argument('--use_feature_map', type=bool, default=False)
     parser.add_argument('--use_grad_campp', type=bool, default=False)
-    parser.add_argument('--feature_map_layer', type=str, default=['layer4'])
+    parser.add_argument('--feature_map_layer', type=str, default='layer4')
     parser.add_argument('--dataset', default='knee', help='Dataset type to use.')
 
     parser.add_argument('--acquisition', type=str2none, default=None,
                         help='Use only volumes acquired using the provided acquisition method. Options are: '
                              'CORPD_FBK, CORPDFS_FBK (fat-suppressed), and not provided (both used).')
-    parser.add_argument('--num_trajectories', type=int, default=8, help='Number of actions to sample every acquisition '
+    parser.add_argument('--num_trajectories', type=int, default= 8, help='Number of actions to sample every acquisition '
                         'step during training.')
     parser.add_argument('--report_interval', type=int, default=1000, help='Period of loss reporting')
     parser.add_argument('--device', type=str, default='cuda',
@@ -430,7 +424,7 @@ def create_arg_parser():
     parser.add_argument('--num_layers', type=int, default=4, help='Number of ConvNet layers. Note that setting '
                         'this too high will cause size mismatch errors, due to even-odd errors in calculation for '
                         'layer size post-flattening (due to max pooling).')
-    parser.add_argument('--drop_prob', type=float, default=0, help='Dropout probability')
+    parser.add_argument('--drop_prob', type=float, default=0.2, help='Dropout probability')
 
     parser.add_argument('--weight_decay', type=float, default=0,
                         help='Strength of weight decay regularization.')
@@ -441,7 +435,7 @@ def create_arg_parser():
                         help='If set, use multiple GPUs using data parallelism')
     parser.add_argument('--do_train_ssim', type=str2bool, default=False,
                         help='Whether to compute SSIM values on training data.')
-    parser.add_argument('--num_epochs', type=int, default=50, help='Number of training epochs')
+    parser.add_argument('--num_epochs', type=int, default=2, help='Number of training epochs')
     parser.add_argument('--seed', default=0, type=int, help='Seed for random number generators. '
                                                             'Set to 0 to use random seed.')
     parser.add_argument('--num_chans', type=int, default=16, help='Number of ConvNet channels in first layer.')

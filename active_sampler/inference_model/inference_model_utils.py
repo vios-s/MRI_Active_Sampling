@@ -28,8 +28,8 @@ def load_infer_model(args, optim=False):
     del checkpoint
 
     if args.use_feature_map:
-        final_infer_model = FeatureMapPiler(infer_model.resnet50.to(device), args.feature_map_layer)
-    elif args.use_feature_map == False & args.use_grad_campp:
+        final_infer_model = FeatureMapPiler(infer_model.resnet50.to(device), [args.feature_map_layer])
+    elif args.use_grad_campp:
         target_layers = [getattr(infer_model.resnet50, args.feature_map_layer)[-1]]
         final_infer_model = GradCAMPPModel(model=infer_model.resnet50.to(device), target_layers=target_layers)
     else:

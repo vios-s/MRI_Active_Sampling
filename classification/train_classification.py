@@ -21,7 +21,7 @@ def build_args():
     batch_size = 16
 
     data_path = fetch_dir("knee_path", path_config)
-    default_root_dir = fetch_dir("log_path", path_config) / "0129_modif_res50_center01_multi_MT_knee_dropout"
+    default_root_dir = fetch_dir("log_path", path_config) / "0129_modif_res50_center0125_multi_MT_knee_dropout"
 
     parser.add_argument("--mode", default="train", type=str, choices=["train", "test"])
     parser.add_argument("--mask_type", default="random", type=str, choices=["random", "equispaced"])
@@ -34,7 +34,7 @@ def build_args():
     parser.add_argument('--accelerations', nargs='+', default=[4, 6, 8, 10, 20], type=int,
                        help='Ratio of k-space columns to be sampled. If multiple values are '
                        'provided, then one of those is chosen uniformly at random for each volume.')
-    parser.add_argument('--center_fractions', nargs='+', default=[0.1, 0.1, 0.1, 0.1, 0.1], type=float,
+    parser.add_argument('--center_fractions', nargs='+', default=[0.125, 0.125, 0.125, 0.125, 0.125], type=float,
                        help='Fraction of low-frequency k-space columns to be sampled. Should '
                        'have the same length as accelerations')
     parser.add_argument("--ckpt_path", default=None, type=str)

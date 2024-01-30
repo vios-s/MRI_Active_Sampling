@@ -1,17 +1,17 @@
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torchmetrics.classification import BinaryConfusionMatrix
 from torchmetrics import Accuracy, AUROC
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-def compute_cross_entropy(outputs, labels):
+def compute_cross_entropy(outputs, label):
     # Using F.cross_entropy directly, without one-hot encoding labels
-    cross_entropy = F.cross_entropy(outputs, labels)
+    critiria = nn.BCELoss()
+    cross_entropy = critiria(outputs.float(), F.one_hot(label, outputs.shape[-1]).float())
 
     return cross_entropy.item()
-
-
 
 def compute_batch_metrics(outputs, label):
     if np.shape(outputs)[-1] == 2:
@@ -22,7 +22,6 @@ def compute_batch_metrics(outputs, label):
     accuracy_metric = Accuracy(task=task).to(device)
     confusion_matrix_metric = BinaryConfusionMatrix(task=task).to(device)
     outputs = torch.argmax(outputs, axis=1)
-    print(outputs, label)
     metrics_dict = {
         'accuracy': accuracy_metric(outputs, label).item(),
         'confusion_matrix': confusion_matrix_metric(outputs, label).detach().cpu().numpy()
