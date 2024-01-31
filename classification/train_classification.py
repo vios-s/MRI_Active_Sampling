@@ -21,7 +21,7 @@ def build_args():
     batch_size = 16
 
     data_path = fetch_dir("knee_path", path_config)
-    default_root_dir = fetch_dir("log_path", path_config) / "0129_modif_res50_center0125_multi_MT_knee_dropout"
+    default_root_dir = fetch_dir("log_path", path_config) / "0131_modif_res50_center0125_multi_MT_knee_dropout_under"
 
     parser.add_argument("--mode", default="train", type=str, choices=["train", "test"])
     parser.add_argument("--mask_type", default="random", type=str, choices=["random", "equispaced"])
@@ -46,7 +46,7 @@ def build_args():
         seed=0,
         batch_size=batch_size,
         default_root_dir=default_root_dir,
-        max_epochs=35,
+        max_epochs=25,
         test_path=None
     )
 
@@ -62,7 +62,7 @@ def build_args():
             dirpath=checkpoint_dir,
             save_top_k=10,
             verbose=True,
-            monitor="val_recall",
+            monitor="val_AUC",
             mode="max",
         )
     ]

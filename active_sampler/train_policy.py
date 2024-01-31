@@ -389,9 +389,9 @@ def main(args):
 
 def create_arg_parser():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--data_path', type=pathlib.Path, default='./Dataset/test_dataset')
-    parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.1, 0.1, 0.1, 0.1, 0.1])
-    parser.add_argument('--accelerations', type=int, nargs='+', default=[4, 6, 8, 10, 20])
+    parser.add_argument('--data_path', type=pathlib.Path, default='./Dataset/knee')
+    parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.1])
+    parser.add_argument('--accelerations', type=int, nargs='+', default=[8])
     parser.add_argument('--resolution', type=list, default=356)
     parser.add_argument('--sample_rate', type=float, default=1.0)
     parser.add_argument('--batch_size', type=int, default=16)
@@ -412,7 +412,7 @@ def create_arg_parser():
     parser.add_argument('--report_interval', type=int, default=1000, help='Period of loss reporting')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Which device to train on. Set to "cuda" to use the GPU')
-    parser.add_argument('--exp_dir', type=pathlib.Path, default='./log/test',
+    parser.add_argument('--exp_dir', type=pathlib.Path, default='./log/0130_zf_MT_center01',
                         help='Directory where model and results should be saved. Will create a timestamped folder '
                         'in provided directory each run')
     parser.add_argument('--reciprocals_in_center', nargs='+', default=[1], type=float,
@@ -435,7 +435,7 @@ def create_arg_parser():
                         help='If set, use multiple GPUs using data parallelism')
     parser.add_argument('--do_train_ssim', type=str2bool, default=False,
                         help='Whether to compute SSIM values on training data.')
-    parser.add_argument('--num_epochs', type=int, default=2, help='Number of training epochs')
+    parser.add_argument('--num_epochs', type=int, default=5, help='Number of training epochs')
     parser.add_argument('--seed', default=0, type=int, help='Seed for random number generators. '
                                                             'Set to 0 to use random seed.')
     parser.add_argument('--num_chans', type=int, default=16, help='Number of ConvNet channels in first layer.')

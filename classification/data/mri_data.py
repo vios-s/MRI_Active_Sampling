@@ -200,8 +200,9 @@ class SliceDataset(torch.utils.data.Dataset):
 
             # Calculate label distribution
             label_distribution = self.count_label_distribution()
-            over_minor_samples = self.oversample_minority(label_distribution)   # Add oversampled samples to the dataset
-            self.raw_samples += over_minor_samples
+            under_major_samples = self.undersample_majority(label_distribution)   # Add oversampled samples to the dataset
+            if data_partition == 'train':
+                self.raw_samples = under_major_samples
             random.shuffle(self.raw_samples)
 
         print("\n")
@@ -234,6 +235,31 @@ class SliceDataset(torch.utils.data.Dataset):
                     oversampled_raw_samples.extend(minority_samples * (oversample_factor - 1))
         return oversampled_raw_samples
 
+    def undersample_majority(self, label_dist):
+        undersampled_raw_samples = []
+        if self.data_partition == 'train':
+            # Identify the majority class
+            majority_class = max(label_dist, key=label_dist.get)
+
+            # Collect samples for the majority class
+            majority_samples = [sample for sample in self.raw_samples if sample.label == majority_class]
+
+            # Check if the majority class is imbalanced
+            if label_dist[majority_class] > min(label_dist.values()):
+                # Calculate the target number of samples for undersampling
+                target_samples = min(label_dist.values())
+
+                # Randomly select samples from the majority class for undersampling
+                undersampled_majority_samples = random.sample(majority_samples, target_samples)
+
+                # Collect samples from the minority class
+                minority_class = min(label_dist, key=label_dist.get)
+                minority_samples = [sample for sample in self.raw_samples if sample.label == minority_class]
+
+                # Combine samples from the minority class with undersampled majority class
+                undersampled_raw_samples = minority_samples + undersampled_majority_samples
+
+        return undersampled_raw_samples
 
     def __len__(self):
         return len(self.raw_samples)
