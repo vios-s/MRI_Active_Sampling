@@ -200,9 +200,14 @@ class SliceDataset(torch.utils.data.Dataset):
 
             # Calculate label distribution
             label_distribution = self.count_label_distribution()
-            under_major_samples = self.undersample_majority(label_distribution)   # Add oversampled samples to the dataset
-            if data_partition == 'train':
-                self.raw_samples = under_major_samples
+            over_minor_samples = self.oversample_minority(label_distribution)
+            self.raw_samples += over_minor_samples
+            # Add oversampled samples to the dataset
+
+            # under_major_samples = self.undersample_majority(label_distribution)
+            # if data_partition == 'train':
+            #     self.raw_samples = under_major_samples
+
             random.shuffle(self.raw_samples)
 
         print("\n")

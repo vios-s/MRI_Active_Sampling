@@ -193,7 +193,7 @@ def compute_backprop_trajectory(args, kspace, masked_kspace, mask, outputs, imag
         single_cross_entropy_scores = criteria(outputs[:, ch, :], F.one_hot(label, outputs.shape[-1]).float())
         cross_entropy_scores.append(single_cross_entropy_scores.mean(dim=-1))
     # batch x num_trajectories
-    action_rewards = base_scores.unsqueeze(-1) - torch.stack(cross_entropy_scores,dim=0).transpose(1,0)
+    action_rewards = base_scores.unsqueeze(-1) - torch.stack(cross_entropy_scores, dim=0).transpose(1, 0)
     # print(action_rewards.shape)
     # batch x 1
     avg_reward = torch.mean(action_rewards, dim=-1, keepdim=True)

@@ -124,7 +124,7 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
     :return: (dict: average SSIMS per time step, dict: average PSNR per time step, float: evaluation duration)
     """
     model.eval()
-    cross_entropy, accuracy = 0, 0
+    cross_entropy, accuracy, recall, specificity = 0, 0, 0, 0
     tbs = 0  # data set size counter
     start = time.perf_counter()
 
@@ -155,6 +155,10 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
         batch_cross_entropy = [init_cross_entropy_val]
         init_acc_val = compute_batch_metrics(outputs, label)['accuracy']
         batch_accuracy = [init_acc_val]
+        init_recall_val = compute_batch_metrics(outputs, label)['recall']
+        batch_recall = [init_recall_val]
+        init_spec_val = compute_batch_metrics(outputs, label)['specificity']
+        batch_specificity = [init_spec_val]
 
 
         for step in range(args.acquisition_steps):
@@ -174,27 +178,37 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
             # assert len(cross_entropy_scores) == 2
             # cross_entropy_scores = cross_entropy_scores.mean(-1).sum()
             accuracy_scores = metrics_scores['accuracy']
+            recall_scores = metrics_scores['recall']
+            specificity_scores = metrics_scores['specificity']
 
 
             # Append to lists
             batch_cross_entropy.append(cross_entropy_scores)
             batch_accuracy.append(accuracy_scores)
+            batch_recall.append(recall_scores)
+            batch_specificity.append(specificity_scores)
 
 
 
         # shape of al_steps
         cross_entropy += np.array(batch_cross_entropy)
         accuracy += np.array(batch_accuracy)
+        recall += np.array(batch_recall)
+        specificity += np.array(batch_specificity)
         # batch_confusion_matrix += np.array(batch_confusion_matrix) need to add more metrics
 
-    cross_entropy /= tbs
-    accuracy /= tbs
+    cross_entropy /= (it+1)
+    accuracy /= (it+1)
+    recall /= (it+1)
+    specificity /= (it+1)
 
     # Logging
     if partition in ['Val', 'Train']:
         for step, val in enumerate(cross_entropy):
             writer.add_scalar(f'{partition}cross_entropy_step{step}', val, epoch)
             writer.add_scalar(f'{partition}accuracy_step{step}', accuracy[step], epoch)
+            writer.add_scalar(f'{partition}recall_step{step}', recall[step], epoch)
+            writer.add_scalar(f'{partition}specificity_step{step}', specificity[step], epoch)
 
         if args.wandb:
             wandb.log({f'{partition.lower()}_cross_entropy': {str(key): val for key, val in enumerate(cross_entropy)}}, step=epoch + 1)
@@ -212,7 +226,7 @@ def evaluate(args, epoch, infer_model, model, loader, writer, partition):
     else:
         raise ValueError(f"'partition' should be in ['Train', 'Val', 'Test'], not: {partition}")
 
-    return cross_entropy, accuracy, time.perf_counter() - start
+    return cross_entropy, accuracy, recall, specificity, time.perf_counter() - start
 
 
 def train_and_eval(args, infer_args, infer_model):
@@ -253,13 +267,11 @@ def train_and_eval(args, infer_args, infer_model):
         optimiser = build_optim(args, model.parameters())
         start_epoch = 0
         # Create directory to store results in
-        savestr = '{}_res{}_al{}_accel{}_k{}_{}_{}'.format(args.dataset, args.resolution, args.acquisition_steps,
+        savestr = '{}_res{}_al{}_accel{}_k{}_{}'.format(args.dataset, args.resolution, args.acquisition_steps,
                                                            args.accelerations, args.num_trajectories,
-                                                           datetime.datetime.now().strftime("%Y-%m-%d_%H:%M:%S"),
-                                                           ''.join(choice(ascii_uppercase) for _ in range(5)))
+                                                           datetime.datetime.now().strftime("%m-%d"))
         args.run_dir = args.exp_dir / savestr
-        args.run_dir.mkdir(parents=True, exist_ok=False)
-
+        os.makedirs(args.run_dir, exist_ok=True)
     args.resumed = resumed
 
     if args.wandb:
@@ -322,11 +334,15 @@ def do_and_log_evaluation(args, epoch, infer_model, model, loader, writer, parti
     """
     Helper function for logging.
     """
-    cross_entropy, accuracy, score_time = evaluate(args, epoch, infer_model, model, loader, writer, partition)
+    cross_entropy, accuracy, recall, specificity, score_time = evaluate(args, epoch, infer_model, model, loader, writer, partition)
     cross_entropy_str = ", ".join(["{}: {:.4f}".format(i, l) for i, l in enumerate(cross_entropy)])
     accuracy_str = ", ".join(["{}: {:.3f}".format(i, l) for i, l in enumerate(accuracy)])
+    recall_str = ", ".join(["{}: {:.3f}".format(i, l) for i, l in enumerate(recall)])
+    specificity_str = ", ".join(["{}: {:.3f}".format(i, l) for i, l in enumerate(specificity)])
     logging.info(f'{partition}Cross Entropy = [{cross_entropy_str}]')
     logging.info(f'{partition}Accuracy = [{accuracy_str}]')
+    logging.info(f'{partition}Recall = [{recall_str}]')
+    logging.info(f'{partition}Specificity = [{specificity_str}]')
     logging.info(f'{partition}ScoreTime = {score_time:.2f}s')
 
 
@@ -393,12 +409,12 @@ def create_arg_parser():
     parser.add_argument('--center_fractions', type=float, nargs='+', default=[0.1])
     parser.add_argument('--accelerations', type=int, nargs='+', default=[8])
     parser.add_argument('--resolution', type=list, default=356)
-    parser.add_argument('--sample_rate', type=float, default=1.0)
+    parser.add_argument('--sample_rate', type=float, default=0.8)
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--val_batch_size', type=int, default=16)
     parser.add_argument('--num_workers', type=int, default=0)
     parser.add_argument('--num_classes', type=int, default=2)
-    parser.add_argument('--infer_model_checkpoint', type=str, default='../classification/log/0123_modif_res50_center01_multi_MT_knee_dropout/checkpoints/epoch=29-step=49770.ckpt')
+    parser.add_argument('--infer_model_checkpoint', type=str, default='../classification/log/test/checkpoints/epoch=24-step=41475-v1.ckpt')
     parser.add_argument('--use_feature_map', type=bool, default=False)
     parser.add_argument('--use_grad_campp', type=bool, default=False)
     parser.add_argument('--feature_map_layer', type=str, default='layer4')

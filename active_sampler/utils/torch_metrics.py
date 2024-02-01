@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torchmetrics.classification import BinaryConfusionMatrix
-from torchmetrics import Accuracy, AUROC
+from torchmetrics import Accuracy, AUROC, Recall, Specificity
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def compute_cross_entropy(outputs, label):
@@ -20,10 +20,14 @@ def compute_batch_metrics(outputs, label):
         task = 'multiclass'
 
     accuracy_metric = Accuracy(task=task).to(device)
+    recall_metric = Recall(task=task).to(device)
+    specificity_metric = Specificity(task=task).to(device)
     confusion_matrix_metric = BinaryConfusionMatrix(task=task).to(device)
     outputs = torch.argmax(outputs, axis=1)
     metrics_dict = {
         'accuracy': accuracy_metric(outputs, label).item(),
+        'recall': recall_metric(outputs, label).item(),
+        'specificity': specificity_metric(outputs, label).item(),
         'confusion_matrix': confusion_matrix_metric(outputs, label).detach().cpu().numpy()
     }
 

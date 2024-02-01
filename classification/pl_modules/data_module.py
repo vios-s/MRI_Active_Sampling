@@ -120,8 +120,8 @@ class FastMriDataModule(pl.LightningDataModule):
             data_path = self.test_path
         else:
             data_path = self.data_path / f"{self.challenge}_{data_partition}"
-            # list_path = self.data_path / f"label.csv"
-            list_path = './Dataset/MT_label_data.csv'
+            list_path = self.data_path / f"label.csv"
+            # list_path = './Dataset/MT_label_data.csv'
 
         dataset = SliceDataset(
             root=data_path,
